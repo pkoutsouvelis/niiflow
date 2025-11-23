@@ -54,6 +54,16 @@ class SlidingWindowPatch(Transform):
             padding_mode: Padding mode; see `torch.nn.functional.pad`.
             padding_side: Side to pad; can be 'right', 'left', or 'both'.
             spatial_dims: Number of spatial dimensions.
+
+        Warnings:
+            UserWarning: If both `n_patches` and `overlap` are provided.
+
+        Raises:
+            ValueError: If neither `n_patches` nor `overlap` are provided.
+            TypeError: If the `patch_size`, `overlap`, `n_patches`, `padding_mode`, 
+                `padding_side`, or `spatial_dims` are not of the correct type.
+            ValueError: If the `patch_size`, `overlap`, and `n_patches` do not 
+                have the expected length.
         """
         super().__init__()
         if n_patches is None and overlap is None:
@@ -66,7 +76,8 @@ class SlidingWindowPatch(Transform):
         if n_patches is not None and overlap is not None:
             warnings.warn(
                 f"{self.__class__.__name__} - Provided both `n_patches` "
-                f"and `overlap`; will use `n_patches`."
+                f"and `overlap`; will use `n_patches`.",
+                UserWarning,
             )
 
         self.patch_size: tuple[int, ...] = ensure_tuple(
@@ -114,6 +125,18 @@ class SlidingWindowPatch(Transform):
         self.slices: list[tuple[slice, ...]] = []  # will be populated by __call__()
 
     def __call__(self, img: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            img: Input tensor of shape (..., C, *spatial_dims).
+
+        Returns:
+            Tensor of shape (..., N_patches, C, *patch_size).
+
+        Raises:
+            ValueError: If the input tensor has less than `spatial_dims + 1` dimensions.
+            Exception: If `pad_to_size` raises an exception, possibly by `torch.nn.functional.pad`
+                through the use of an invalid `padding_mode`.
+        """
         if img.ndim < 1 + self.spatial_dims:
             msg = (
                 f"{self.__class__.__name__} - Expected at least "
