@@ -2,6 +2,9 @@
 .venv/
 venv/
 
+# uv
+.uv/
+
 # Ignore macOS system files
 .DS_Store
 

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "niiflow-core"
+version = "0.1.0"
+description = "Training and fine-tuning brain MRI foundation models (MONAI + PyTorch Lightning)."
+requires-python = ">=3.11"
+license = "MIT"
+readme = "README.md"
+authors = [{ name = "Petros Koutsouvelis" }]
+dependencies = [
+    "nifti-finder>=1.1.0,<2.0.0",
+    "lightning>=2.5.5,<3.0.0",
+    "monai>=1.5.0,<2.0.0",
+    "numpy>=2.3.5,<3.0.0",
+    "torch>=2.9.1,<3.0.0",
+    "wandb>=0.23.0,<1.0.0",
+    "matplotlib>=3.10.7,<4.0.0",
+    "PyYAML>=6.0.2,<7.0.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["niiflow*"]
+namespaces = true
