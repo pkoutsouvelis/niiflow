@@ -7,6 +7,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# Member source trees only (avoids nested package .venv/, tests/, and site-packages).
+SOURCE_DIRS=(
+  packages/niiflow-core/src
+  packages/niiflow-preproc/src
+  packages/niiflow/src
+)
+
 # Use project venv binaries when `uv` is not on PATH (e.g. uv installed only inside .venv).
 if [[ -d "$ROOT/.venv/bin" ]]; then
   PATH="$ROOT/.venv/bin:$PATH"
@@ -22,18 +29,18 @@ run() {
 }
 
 echo "Running Ruff..."
-run ruff check --fix .
+run ruff check --fix "${SOURCE_DIRS[@]}"
 
 echo "Running Docformatter..."
-# Scope to `packages/` only: docformatter only handles Python and can error on odd files at repo root.
-# `--black` matches Black’s wrapping; place paths before `-e` so argparse does not treat `.` as an exclude.
-run docformatter -r --in-place --black packages
+# Docstrings only; `--black` matches Black’s wrapping. Do not recurse over `packages/`
+# (would hit stale per-package `.venv/` trees and third-party site-packages).
+run docformatter -r --in-place --black "${SOURCE_DIRS[@]}"
 
 echo "Running Black..."
-run black .
+run black "${SOURCE_DIRS[@]}"
 
 echo "Checking doc coverage..."
-# Source trees only (skip per-package tests); config in root `pyproject.toml` under `[tool.interrogate]`.
-run interrogate packages/niiflow-core/src packages/niiflow-preproc/src packages/niiflow/src
+# Config in root `pyproject.toml` under `[tool.interrogate]`.
+run interrogate "${SOURCE_DIRS[@]}"
 
 echo "Done."

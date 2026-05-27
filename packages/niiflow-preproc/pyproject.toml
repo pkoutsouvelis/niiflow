@@ -14,11 +14,10 @@ dependencies = [
     "numpy>=2.3.5,<3.0.0",
     "nibabel>=5.0.0,<6.0.0",
     "PyYAML>=6.0.2,<7.0.0",
+    "antspyx",
 ]
 
 [project.optional-dependencies]
-# ANTs-backed pipelines: add when you wire antspyx; keeps default install light.
-ants = []
 test = ["pytest>=7.0"]
 
 [tool.setuptools]
