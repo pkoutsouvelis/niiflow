@@ -18,6 +18,41 @@ def ensure_ants_image(image: ANTsImage, name: str = "image") -> None:
         raise ValueError(f"`{name}` must be an ANTsImage, got {type(image).__name__}")
 
 
+def reject_reserved_kwargs(
+    kwargs: dict[str, Any],
+    reserved: Sequence[str],
+    *,
+    func_name: str,
+) -> None:
+    """Reject `kwargs` keys that the wrapper already sets explicitly.
+
+    Several wrappers forward ``**kwargs`` to an ANTs function while also
+    passing a few arguments explicitly, often under a more intuitive name
+    (e.g. ``image``/``target`` instead of ``moving``/``fixed``). Letting the
+    same underlying argument come through ``kwargs`` as well would either
+    raise an opaque :class:`TypeError` ("got multiple values for ...") or
+    silently override the explicit value, so we reject the clashing keys up
+    front with an actionable message.
+
+    Args:
+        kwargs:
+            The keyword arguments forwarded by the caller.
+        reserved:
+            Names that the wrapper controls and must not be overridden.
+        func_name:
+            Name of the calling wrapper, used in the error message.
+
+    Raises:
+        TypeError: If any reserved name is present in `kwargs`.
+    """
+    clashing = sorted(set(reserved) & set(kwargs))
+    if clashing:
+        raise TypeError(
+            f"{func_name}() does not accept {clashing} via `kwargs`; these are "
+            "set through dedicated parameters."
+        )
+
+
 def ants_to_numpy_with_metadata(image: ANTsImage) -> tuple[np.ndarray, dict[str, Any]]:
     """Convert `image` to numpy and capture enough metadata to reconstruct it."""
     ensure_ants_image(image)
