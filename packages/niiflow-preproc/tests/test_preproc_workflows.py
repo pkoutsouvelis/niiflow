@@ -22,7 +22,7 @@ The behaviors exercised here are:
 1. Construction from a single :class:`pathlib.Path`, a list of paths,
    a ``str``, a list of ``str``, or an explorer ``dict`` config.
 2. Filterable file discovery using ``nifti_finder``'s
-   ``AllPurposeFileExplorer`` (patterns + optional filters, including
+   ``AllPurposeFileExplorer`` (pattern + optional filters, including
    ``ComposeFilter``) when the explorer ``dict`` config is used.
 3. Staging contract: ``stage`` must return ``list[StagedEntry]``;
    the default 1-file-per-entry behavior is verified.
@@ -284,7 +284,7 @@ class TestWorkflowConstruction:
         self, workflow_cls: WorkflowFactory, dataset_root: Path
     ) -> None:
         wf = workflow_cls(
-            files={"root": dataset_root, "patterns": "*.nii*"}, num_workers=1
+            files={"root": dataset_root, "pattern": "*.nii*"}, num_workers=1
         )
         assert wf.root == dataset_root.resolve()
 
@@ -301,7 +301,7 @@ class TestWorkflowFilterableFileDiscovery:
         self, workflow_cls: WorkflowFactory, dataset_root: Path
     ) -> None:
         wf = workflow_cls(
-            files={"root": dataset_root, "patterns": "*.nii*"}, num_workers=1
+            files={"root": dataset_root, "pattern": "*.nii*"}, num_workers=1
         )
 
         names = sorted(p.name for p in wf.files)
@@ -325,7 +325,7 @@ class TestWorkflowFilterableFileDiscovery:
         wf = workflow_cls(
             files={
                 "root": str(dataset_root),  # str root works too
-                "patterns": "sub-*/anat/*T1w.nii*",
+                "pattern": "sub-*/anat/*T1w.nii*",
             },
             num_workers=1,
         )
@@ -343,7 +343,7 @@ class TestWorkflowFilterableFileDiscovery:
         wf = workflow_cls(
             files={
                 "root": dataset_root,
-                "patterns": "sub-*/anat/*T1w*.nii*",
+                "pattern": "sub-*/anat/*T1w*.nii*",
                 "filters": {
                     "name": "ExcludeFileRegex",
                     "kwargs": {"regex": r".*_seg\.nii.*"},
@@ -363,7 +363,7 @@ class TestWorkflowFilterableFileDiscovery:
         wf = workflow_cls(
             files={
                 "root": dataset_root,
-                "patterns": "*.nii*",
+                "pattern": "*.nii*",
                 "filters": {
                     "name": "ComposeFilter",
                     "kwargs": {
@@ -393,8 +393,8 @@ class TestWorkflowFilterableFileDiscovery:
         wf = workflow_cls(
             files={
                 "root": dataset_root,
-                # Two overlapping patterns -> dedup must kick in.
-                "patterns": ["*.nii*", "sub-*/anat/*T1w.nii*"],
+                # Two overlapping pattern -> dedup must kick in.
+                "pattern": ["*.nii*", "sub-*/anat/*T1w.nii*"],
             },
             num_workers=1,
         )
@@ -403,18 +403,18 @@ class TestWorkflowFilterableFileDiscovery:
 
     def test_missing_root_key_raises(self, workflow_cls: WorkflowFactory) -> None:
         with pytest.raises(ValueError, match="root"):
-            workflow_cls(files={"patterns": "*.nii*"}, num_workers=1)
+            workflow_cls(files={"pattern": "*.nii*"}, num_workers=1)
 
-    def test_missing_patterns_key_raises(
+    def test_missing_pattern_key_raises(
         self, workflow_cls: WorkflowFactory, dataset_root: Path
     ) -> None:
-        with pytest.raises(ValueError, match="patterns"):
+        with pytest.raises(ValueError, match="pattern"):
             workflow_cls(files={"root": dataset_root}, num_workers=1)
 
     def test_invalid_root_type_raises(self, workflow_cls: WorkflowFactory) -> None:
         with pytest.raises(ValueError, match="root"):
             workflow_cls(
-                files={"root": 12345, "patterns": "*.nii*"},  # type: ignore[dict-item]
+                files={"root": 12345, "pattern": "*.nii*"},  # type: ignore[dict-item]
                 num_workers=1,
             )
 
@@ -476,7 +476,7 @@ class TestWorkflowRun:
     ) -> None:
         sentinels = tmp_path / "sentinels"
         wf = workflow_cls(
-            files={"root": dataset_root, "patterns": "*.nii*"},
+            files={"root": dataset_root, "pattern": "*.nii*"},
             pipeline_config={"out_dir": str(sentinels)},
             num_workers=1,
         )
@@ -498,7 +498,7 @@ class TestWorkflowRun:
     ) -> None:
         sentinels = tmp_path / "sentinels"
         wf = workflow_cls(
-            files={"root": dataset_root, "patterns": "*.nii*"},
+            files={"root": dataset_root, "pattern": "*.nii*"},
             pipeline_config={"out_dir": str(sentinels)},
             num_workers=1,
         )
@@ -517,7 +517,7 @@ class TestWorkflowRun:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         wf = workflow_cls(
-            files={"root": dataset_root, "patterns": "*.nii*"}, num_workers=1
+            files={"root": dataset_root, "pattern": "*.nii*"}, num_workers=1
         )
 
         seen: list[StagedEntry] = []
@@ -570,7 +570,7 @@ class TestWorkflowRun:
         empty_root.mkdir()
 
         wf = workflow_cls(
-            files={"root": empty_root, "patterns": "*.nii*"}, num_workers=1
+            files={"root": empty_root, "pattern": "*.nii*"}, num_workers=1
         )
 
         called: list[StagedEntry] = []
@@ -596,7 +596,7 @@ class TestWorkflowRun:
     ) -> None:
         sentinels = tmp_path / "sentinels"
         wf = workflow_cls(
-            files={"root": dataset_root, "patterns": "*.nii*"},
+            files={"root": dataset_root, "pattern": "*.nii*"},
             pipeline_config={"out_dir": str(sentinels)},
             num_workers=1,
         )
@@ -643,7 +643,7 @@ class TestWorkflowMultiWorkerExecution:
     ) -> None:
         sentinels = tmp_path / "sentinels"
         wf = workflow_cls(
-            files={"root": dataset_root, "patterns": "*.nii*"},
+            files={"root": dataset_root, "pattern": "*.nii*"},
             pipeline_config={"out_dir": str(sentinels)},
             num_workers=num_workers,
         )
@@ -665,7 +665,7 @@ class TestWorkflowMultiWorkerExecution:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         wf = workflow_cls(
-            files={"root": dataset_root, "patterns": "*.nii*"},
+            files={"root": dataset_root, "pattern": "*.nii*"},
             pipeline_config={"out_dir": str(tmp_path)},
             num_workers=2,
         )
@@ -684,7 +684,7 @@ class TestWorkflowMultiWorkerExecution:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         wf = workflow_cls(
-            files={"root": dataset_root, "patterns": "*.nii*"},
+            files={"root": dataset_root, "pattern": "*.nii*"},
             num_workers=2,
             logs_root=logs_dir,
         )
@@ -784,7 +784,7 @@ class TestWorkflowLogging:
         assert "WORKER_CONSOLE" in console
         assert "| SUCCESS" in console
         assert "Workflow complete" in console
-    
+
     def test_console_includes_main_status_and_worker_logs_when_logs_root_set(
         self,
         workflow_cls: WorkflowFactory,
@@ -866,7 +866,7 @@ class TestWorkflowLogging:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         wf = workflow_cls(
-            files={"root": dataset_root, "patterns": "*.nii*"},
+            files={"root": dataset_root, "pattern": "*.nii*"},
             num_workers=1,
             logs_root=logs_dir,
         )
@@ -931,7 +931,7 @@ class TestWorkflowLogging:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         wf = workflow_cls(
-            files={"root": dataset_root, "patterns": "*.nii*"},
+            files={"root": dataset_root, "pattern": "*.nii*"},
             pipeline_config={"message": "WORKER_MSG"},
             num_workers=2,
             logs_root=logs_dir,
@@ -940,7 +940,7 @@ class TestWorkflowLogging:
 
         wf.run()
 
-        workers_log = (logs_dir / "workers.log")
+        workers_log = logs_dir / "workers.log"
         assert workers_log.exists()
         worker_lines = workers_log.read_text(encoding="utf-8").splitlines()
         worker_lines = [line for line in worker_lines if "WORKER_MSG" in line]
@@ -960,7 +960,7 @@ class TestWorkflowLogging:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         wf = workflow_cls(
-            files={"root": dataset_root, "patterns": "*.nii*"},
+            files={"root": dataset_root, "pattern": "*.nii*"},
             pipeline_config={"message": "WORKER_INFO_OFF"},
             num_workers=2,
             logs_root=logs_dir,
@@ -981,7 +981,7 @@ class TestWorkflowLogging:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         wf = workflow_cls(
-            files={"root": dataset_root, "patterns": "*.nii*"},
+            files={"root": dataset_root, "pattern": "*.nii*"},
             pipeline_config={"message": "WORKER_DEBUG_MSG"},
             num_workers=2,
             logs_root=logs_dir,
@@ -991,6 +991,6 @@ class TestWorkflowLogging:
 
         wf.run()
 
-        workers_log = (logs_dir / "workers.log")
+        workers_log = logs_dir / "workers.log"
         assert workers_log.exists()
         assert "WORKER_DEBUG_MSG" in workers_log.read_text(encoding="utf-8")

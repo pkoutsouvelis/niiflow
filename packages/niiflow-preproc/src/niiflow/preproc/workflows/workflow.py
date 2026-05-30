@@ -7,7 +7,7 @@ __all__ = [
 ]
 
 from abc import ABC, abstractmethod
-from typing import Callable, Any, TypeAlias, Literal
+from typing import Callable, Any, Literal
 from pathlib import Path
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -15,14 +15,13 @@ import traceback
 from dataclasses import dataclass
 
 from niiflow.preproc.utils.file import resolve_path
-from niiflow.preproc.workflows.explorer_factory import get_data_explorer
+from niiflow.preproc.data import get_data_explorer
 from niiflow.preproc.workflows.logging_manager import LoggingManager
 from niiflow.preproc.workflows.logging_utils import (
     set_input_file_context,
     reset_input_file_context,
 )
-
-InputData: TypeAlias = Path | list[Path] | str | list[str] | dict[str, Any]
+from niiflow.preproc.utils._types import InputData
 
 
 def _execute_one(
@@ -243,12 +242,13 @@ class PreprocessingWorkflow(ABC):
                     f"`root` must be a Path or str object, got {type(files['root']).__name__}"
                 )
 
-            if "patterns" not in files:
-                raise ValueError("`patterns` key is required in `data` dictionary")
+            if "pattern" not in files:
+                raise ValueError("`pattern` key is required in `data` dictionary")
 
             try:
                 explorer = get_data_explorer(
-                    files["patterns"], files.get("filters", None)
+                    pattern=files["pattern"],
+                    filter_kwargs=files.get("filters", None),
                 )
             except Exception as e:
                 raise RuntimeError(

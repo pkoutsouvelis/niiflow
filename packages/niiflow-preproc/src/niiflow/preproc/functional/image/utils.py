@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
+import ants
 import numpy as np
 from ants.core import ANTsImage
 
@@ -45,3 +47,63 @@ def numpy_to_ants_with_metadata(
             f"{array.shape} and {reference_image.shape}"
         )
     return reference_image.new_image_like(array)
+
+
+def reconstruct_ants_image(
+    array: np.ndarray,
+    reference_image: ANTsImage,
+    voxel_offset: Sequence[int] | np.ndarray | None = None,
+) -> ANTsImage:
+    """Build a new ANTsImage from `array`, preserving `reference_image`'s frame.
+
+    The new image inherits spacing and direction from `reference_image`.
+    The origin is shifted to remain spatially consistent with the cropping
+    or padding implied by `voxel_offset`, which is the index (in
+    `reference_image`'s voxel coordinates) that becomes the new array's
+    ``(0, ..., 0)`` voxel:
+
+    * Positive values correspond to cropping forward along that axis.
+    * Negative values correspond to padding before along that axis.
+    * Zero (the default for every axis) leaves the origin unchanged.
+
+    Args:
+        array:
+            The reshaped numeric array to wrap.
+        reference_image:
+            The ANTsImage whose frame (spacing, direction, origin) is
+            inherited.
+        voxel_offset:
+            Per-axis offset, of length ``reference_image.dimension``.
+            When ``None`` (default) a zero offset is used, in which case
+            this is equivalent to :func:`numpy_to_ants_with_metadata`
+            when shapes match.
+
+    Returns:
+        An :class:`ants.core.ANTsImage` wrapping `array` with consistent
+        spatial metadata.
+    """
+    validate_numeric_array(array)
+    ensure_ants_image(reference_image, name="reference_image")
+
+    ndim = reference_image.dimension
+    if voxel_offset is None:
+        offset = np.zeros(ndim, dtype=np.float64)
+    else:
+        offset = np.asarray(voxel_offset, dtype=np.float64)
+        if offset.shape != (ndim,):
+            raise ValueError(
+                f"`voxel_offset` must have length {ndim}, got shape "
+                f"{tuple(offset.shape)}"
+            )
+
+    spacing = np.asarray(reference_image.spacing, dtype=np.float64)
+    direction = np.asarray(reference_image.direction, dtype=np.float64)
+    origin = np.asarray(reference_image.origin, dtype=np.float64)
+    new_origin = origin + direction @ (spacing * offset)
+
+    return ants.from_numpy(
+        array,
+        origin=tuple(new_origin.tolist()),
+        spacing=tuple(float(s) for s in reference_image.spacing),
+        direction=direction,
+    )

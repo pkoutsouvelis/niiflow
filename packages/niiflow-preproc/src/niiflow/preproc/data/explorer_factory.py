@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+__all__ = [
+    "get_data_explorer",
+]
+
 import importlib
 from typing import Any, Sequence, cast
 
 from nifti_finder.explorers import AllPurposeFileExplorer
 from nifti_finder.filters import Filter
 
+from niiflow.preproc.utils._types import FilterConfig, ComposeFilterKwargs
+
 _FILTER_MODULES: tuple[str, ...] = ("nifti_finder.filters",)
 
 
-def _get_filter_name_and_kwargs(entry: dict[str, Any]) -> dict[str, Any]:
+def _get_filter_name_and_kwargs(entry: FilterConfig) -> dict[str, Any]:
     if "name" not in entry:
         raise ValueError("`name` key is required in filter entry")
     if "kwargs" not in entry:
@@ -32,7 +38,7 @@ def _get_filter_obj(filter_name: str, kwargs: dict[str, Any]) -> Filter:
     )
 
 
-def _build_filter(filters: dict[str, Any] | None) -> Filter | None:
+def _build_filter(filters: FilterConfig | None) -> Filter | None:
     """Recursively instantiate filters from a nested mapping.
 
     Accepts the same shape your existing factory uses:
@@ -48,7 +54,7 @@ def _build_filter(filters: dict[str, Any] | None) -> Filter | None:
     name_and_kwargs = _get_filter_name_and_kwargs(filters)
 
     if name_and_kwargs["filter_name"] == "ComposeFilter":
-        inner = name_and_kwargs["kwargs"]["filters"]
+        inner = cast(ComposeFilterKwargs, name_and_kwargs["kwargs"])["filters"]
         if isinstance(inner, dict):
             return _build_filter(inner)
         if isinstance(inner, list):
@@ -68,25 +74,26 @@ def _build_filter(filters: dict[str, Any] | None) -> Filter | None:
 
 
 def get_data_explorer(
-    patterns: str | Sequence[str],
-    filter_kwargs: dict[str, Any] | None = None,
+    pattern: str | Sequence[str],
+    filter_kwargs: FilterConfig | None = None,
 ) -> AllPurposeFileExplorer:
     """Instantiate nifti-finder's `AllPurposeFileExplorer` with user-provided settings.
 
     Args:
-        patterns: A string or list of strings representing the patterns to match.
+        pattern: A string or list of strings representing the pattern to match.
         filter_kwargs: A dictionary of keyword arguments to pass to the filter.
 
     Returns:
         An `AllPurposeFileExplorer` instance.
     """
     flt = _build_filter(filter_kwargs) if filter_kwargs else None
-    if not isinstance(patterns, (str, list)):
+    if not isinstance(pattern, (str, list)):
         raise ValueError(
-            f"`patterns` must be a string or list of strings, got {type(patterns).__name__}"
+            f"`pattern` must be a string or list of strings, got {type(pattern).__name__}"
         )
-    if isinstance(patterns, list) and any(not isinstance(p, str) for p in patterns):
+    if isinstance(pattern, list) and any(not isinstance(p, str) for p in pattern):
         raise ValueError(
-            f"`patterns` must be a list of strings, got {type(patterns).__name__}"
+            f"`pattern` must be a list of strings, got {type(pattern).__name__}"
         )
-    return AllPurposeFileExplorer(patterns, filters=flt)
+
+    return AllPurposeFileExplorer(pattern, filters=flt)

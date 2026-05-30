@@ -76,9 +76,7 @@ class TestClampIntensities:
         out = clamp_intensities(simple_array, lower_pct=0.0, upper_pct=100.0)
         np.testing.assert_array_equal(out, simple_array)
 
-    def test_custom_percentiles_match_numpy(
-        self, simple_array: np.ndarray
-    ) -> None:
+    def test_custom_percentiles_match_numpy(self, simple_array: np.ndarray) -> None:
         out = clamp_intensities(simple_array, lower_pct=25.0, upper_pct=75.0)
         lower, upper = np.percentile(simple_array, [25.0, 75.0])
         np.testing.assert_array_equal(out, np.clip(simple_array, lower, upper))
@@ -115,9 +113,7 @@ class TestClampIntensities:
         arr = np.array([-50.0, 1, 2, 3, 4, 5, 6, 7, 8, 50.0])
         mask = np.array([0, 1, 1, 1, 1, 1, 1, 1, 1, 0], dtype=bool)
 
-        out = clamp_intensities(
-            arr, lower_pct=25.0, upper_pct=75.0, limit_to=mask
-        )
+        out = clamp_intensities(arr, lower_pct=25.0, upper_pct=75.0, limit_to=mask)
 
         # Outside-mask voxels are preserved exactly.
         assert out[0] == -50.0
@@ -137,16 +133,12 @@ class TestClampIntensities:
         ],
         ids=["bool", "int32", "float64"],
     )
-    def test_limit_to_accepts_bool_int_and_float_encodings(
-        self, mask_factory
-    ) -> None:
+    def test_limit_to_accepts_bool_int_and_float_encodings(self, mask_factory) -> None:
         arr = np.array([-50.0, 1, 2, 3, 4, 5, 6, 7, 8, 50.0])
         bool_mask = np.array([0, 1, 1, 1, 1, 1, 1, 1, 1, 0], dtype=bool)
         mask = mask_factory(bool_mask)
 
-        out = clamp_intensities(
-            arr, lower_pct=25.0, upper_pct=75.0, limit_to=mask
-        )
+        out = clamp_intensities(arr, lower_pct=25.0, upper_pct=75.0, limit_to=mask)
 
         reference = clamp_intensities(
             arr, lower_pct=25.0, upper_pct=75.0, limit_to=bool_mask
@@ -183,9 +175,7 @@ class TestClampIntensitiesValidation:
         with pytest.raises(ValueError, match="`limit_to` must be a numpy array"):
             clamp_intensities(simple_array, limit_to=[1, 0, 1, 0, 1, 0, 1, 0, 1, 0])  # type: ignore[arg-type]
 
-    def test_rejects_shape_mismatched_limit_to(
-        self, simple_array: np.ndarray
-    ) -> None:
+    def test_rejects_shape_mismatched_limit_to(self, simple_array: np.ndarray) -> None:
         with pytest.raises(ValueError, match="must have shape"):
             clamp_intensities(simple_array, limit_to=np.ones(5, dtype=bool))
 
@@ -277,9 +267,7 @@ class TestZTransformNorm:
         ],
         ids=["bool", "int32", "float64"],
     )
-    def test_limit_to_accepts_bool_int_and_float_encodings(
-        self, mask_factory
-    ) -> None:
+    def test_limit_to_accepts_bool_int_and_float_encodings(self, mask_factory) -> None:
         arr = np.array([-100.0, 1, 2, 3, 4, 5, 6, 7, 8, 100.0])
         bool_mask = np.array([0, 1, 1, 1, 1, 1, 1, 1, 1, 0], dtype=bool)
 
@@ -311,9 +299,7 @@ class TestZTransformNormValidation:
         with pytest.raises(ValueError, match="numeric dtype"):
             z_transform_norm(np.array(["a", "b", "c"]))
 
-    def test_rejects_shape_mismatched_limit_to(
-        self, simple_array: np.ndarray
-    ) -> None:
+    def test_rejects_shape_mismatched_limit_to(self, simple_array: np.ndarray) -> None:
         with pytest.raises(ValueError, match="must have shape"):
             z_transform_norm(simple_array, limit_to=np.ones(5, dtype=bool))
 
@@ -398,9 +384,7 @@ class TestMinmaxNorm:
         ],
         ids=["bool", "int32", "float64"],
     )
-    def test_limit_to_accepts_bool_int_and_float_encodings(
-        self, mask_factory
-    ) -> None:
+    def test_limit_to_accepts_bool_int_and_float_encodings(self, mask_factory) -> None:
         arr = np.array([-100.0, 1, 2, 3, 4, 5, 6, 7, 8, 100.0])
         bool_mask = np.array([0, 1, 1, 1, 1, 1, 1, 1, 1, 0], dtype=bool)
 
@@ -432,9 +416,7 @@ class TestMinmaxNormValidation:
         with pytest.raises(ValueError, match="numeric dtype"):
             minmax_norm(np.array(["a", "b", "c"]))
 
-    def test_rejects_shape_mismatched_limit_to(
-        self, simple_array: np.ndarray
-    ) -> None:
+    def test_rejects_shape_mismatched_limit_to(self, simple_array: np.ndarray) -> None:
         with pytest.raises(ValueError, match="must have shape"):
             minmax_norm(simple_array, limit_to=np.ones(5, dtype=bool))
 
@@ -526,7 +508,9 @@ class TestANTsImageNormalizationWrappers:
         img = ants_mod.from_numpy(arr)
         mask_img = ants_mod.from_numpy(mask_arr)
 
-        clamped = clamp_intensities_ants(img, lower_pct=25.0, upper_pct=75.0, limit_to=mask_img)
+        clamped = clamp_intensities_ants(
+            img, lower_pct=25.0, upper_pct=75.0, limit_to=mask_img
+        )
         zed = z_transform_norm_ants(img, limit_to=mask_img)
         minmaxed = minmax_norm_ants(img, limit_to=mask_img)
 
@@ -534,8 +518,12 @@ class TestANTsImageNormalizationWrappers:
             clamped.numpy(),
             clamp_intensities(arr, lower_pct=25.0, upper_pct=75.0, limit_to=mask_arr),
         )
-        np.testing.assert_allclose(zed.numpy(), z_transform_norm(arr, limit_to=mask_arr))
-        np.testing.assert_allclose(minmaxed.numpy(), minmax_norm(arr, limit_to=mask_arr))
+        np.testing.assert_allclose(
+            zed.numpy(), z_transform_norm(arr, limit_to=mask_arr)
+        )
+        np.testing.assert_allclose(
+            minmaxed.numpy(), minmax_norm(arr, limit_to=mask_arr)
+        )
 
     def test_ants_wrappers_preserve_metadata(self, ants_mod) -> None:
         from niiflow.preproc.functional.image.intensity_normalization import (
@@ -558,7 +546,9 @@ class TestANTsImageNormalizationWrappers:
 
         assert tuple(out_img.origin) == tuple(img.origin)
         assert tuple(out_img.spacing) == tuple(img.spacing)
-        np.testing.assert_allclose(np.asarray(out_img.direction), np.asarray(img.direction))
+        np.testing.assert_allclose(
+            np.asarray(out_img.direction), np.asarray(img.direction)
+        )
 
     def test_ants_wrappers_reject_non_image_inputs(self, ants_mod) -> None:
         from niiflow.preproc.functional.image.intensity_normalization import (

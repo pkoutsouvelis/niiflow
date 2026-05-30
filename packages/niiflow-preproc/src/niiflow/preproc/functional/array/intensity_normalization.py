@@ -7,6 +7,12 @@ of interest. Outputs are always fresh arrays; inputs are never modified in place
 
 from __future__ import annotations
 
+__all__ = [
+    "clamp_intensities",
+    "z_transform_norm",
+    "minmax_norm",
+]
+
 import numpy as np
 
 from .utils import resolve_limit_to_mask, validate_numeric_array
