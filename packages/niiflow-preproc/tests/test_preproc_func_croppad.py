@@ -2,7 +2,8 @@
 
 These tests pin the public contract of the cropping and padding helpers
 in :mod:`niiflow.preproc.functional.array.croppad` and their ANTsImage
-wrappers in :mod:`niiflow.preproc.functional.image.croppad`:
+wrappers in :mod:`niiflow.preproc.functional.image.croppad` (same names as the
+array layer):
 
 * :func:`bbox_from_mask` -- bounding box of a binary mask, optionally
   padded and always clipped to image bounds.
@@ -29,7 +30,7 @@ The behaviors exercised here are:
 4. Shape and dtype preservation contracts.
 5. Comprehensive input validation -- every documented contract failure
    raises :class:`ValueError` with a useful message.
-6. ANTsImage wrappers mirror the array behavior and keep the image
+6. Image-layer croppad mirrors the array behavior and keeps the image
    spacing and direction, while shifting the origin to remain spatially
    consistent with the cropping or padding performed.
 """
@@ -47,6 +48,7 @@ from niiflow.preproc.functional.array.croppad import (
     crop_to_range,
     pad_to_range,
 )
+from niiflow.preproc.functional.image import croppad as image_croppad
 
 # ---------------------------------------------------------------------------
 # Shared fixtures.
@@ -636,7 +638,7 @@ class TestChainedCropPad:
 
 
 # ---------------------------------------------------------------------------
-# ANTsImage wrappers.
+# Image-layer croppad (ANTsImage).
 # ---------------------------------------------------------------------------
 
 
@@ -679,18 +681,16 @@ def _expected_origin(image, voxel_offset: tuple[int, ...]) -> np.ndarray:
     return origin + direction @ (spacing * np.asarray(voxel_offset))
 
 
-class TestANTsImageCropPadWrappers:
-    """ANTsImage wrappers must mirror array behavior and update metadata."""
+class TestImageCropPad:
+    """Image-layer croppad must mirror array behavior and update metadata."""
 
-    def test_bbox_from_mask_ants_matches_array(self, ants_mask_3d) -> None:
-        from niiflow.preproc.functional.image.croppad import bbox_from_mask_ants
+    def test_bbox_from_mask_matches_array(self, ants_mask_3d) -> None:
+        assert image_croppad.bbox_from_mask(ants_mask_3d) == bbox_from_mask(
+            ants_mask_3d.numpy()
+        )
 
-        assert bbox_from_mask_ants(ants_mask_3d) == bbox_from_mask(ants_mask_3d.numpy())
-
-    def test_crop_to_range_ants_matches_array(self, ants_image_3d) -> None:
-        from niiflow.preproc.functional.image.croppad import crop_to_range_ants
-
-        out = crop_to_range_ants(ants_image_3d, [(1, 5), (2, 7), (0, 6)])
+    def test_crop_to_range_matches_array(self, ants_image_3d) -> None:
+        out = image_croppad.crop_to_range(ants_image_3d, [(1, 5), (2, 7), (0, 6)])
         expected = crop_to_range(ants_image_3d.numpy(), [(1, 5), (2, 7), (0, 6)])
         np.testing.assert_allclose(out.numpy(), expected)
         np.testing.assert_allclose(
@@ -699,20 +699,18 @@ class TestANTsImageCropPadWrappers:
         )
         assert tuple(out.spacing) == tuple(ants_image_3d.spacing)
 
-    def test_crop_to_range_ants_handles_none_starts(self, ants_image_3d) -> None:
-        from niiflow.preproc.functional.image.croppad import crop_to_range_ants
-
-        out = crop_to_range_ants(ants_image_3d, [(None, 5), (None, None), (3, None)])
+    def test_crop_to_range_handles_none_starts(self, ants_image_3d) -> None:
+        out = image_croppad.crop_to_range(
+            ants_image_3d, [(None, 5), (None, None), (3, None)]
+        )
         # Voxel offset = (0, 0, 3).
         np.testing.assert_allclose(
             np.asarray(out.origin),
             _expected_origin(ants_image_3d, (0, 0, 3)),
         )
 
-    def test_crop_to_mask_ants_matches_array(self, ants_image_3d, ants_mask_3d) -> None:
-        from niiflow.preproc.functional.image.croppad import crop_to_mask_ants
-
-        out_img, crop_ranges = crop_to_mask_ants(
+    def test_crop_to_mask_matches_array(self, ants_image_3d, ants_mask_3d) -> None:
+        out_img, crop_ranges = image_croppad.crop_to_mask(
             ants_image_3d, mask=ants_mask_3d, pad=1
         )
         expected_arr, expected_crop_ranges = crop_to_mask(
@@ -728,9 +726,7 @@ class TestANTsImageCropPadWrappers:
             ),
         )
 
-    def test_crop_to_mask_ants_without_mask(self, ants_mod) -> None:
-        from niiflow.preproc.functional.image.croppad import crop_to_mask_ants
-
+    def test_crop_to_mask_without_mask(self, ants_mod) -> None:
         arr = np.zeros((6, 6, 6), dtype=np.float64)
         arr[1:4, 2:5, 3:6] = 1.0
         img = ants_mod.from_numpy(
@@ -739,16 +735,14 @@ class TestANTsImageCropPadWrappers:
             spacing=(1.0, 1.0, 1.0),
             direction=np.eye(3),
         )
-        out_img, crop_ranges = crop_to_mask_ants(img)
+        out_img, crop_ranges = image_croppad.crop_to_mask(img)
         assert out_img.shape == (3, 3, 3)
         assert crop_ranges == ((1, 4), (2, 5), (3, 6))
         np.testing.assert_allclose(out_img.numpy(), np.ones((3, 3, 3)))
         np.testing.assert_allclose(np.asarray(out_img.origin), [1.0, 2.0, 3.0])
 
-    def test_center_crop_ants_matches_array(self, ants_image_3d) -> None:
-        from niiflow.preproc.functional.image.croppad import center_crop_ants
-
-        out_img, crop_ranges = center_crop_ants(ants_image_3d, shape=(4, 4, 4))
+    def test_center_crop_matches_array(self, ants_image_3d) -> None:
+        out_img, crop_ranges = image_croppad.center_crop(ants_image_3d, shape=(4, 4, 4))
         expected, expected_crop_ranges = center_crop(
             ants_image_3d.numpy(), shape=(4, 4, 4)
         )
@@ -759,10 +753,8 @@ class TestANTsImageCropPadWrappers:
             _expected_origin(ants_image_3d, (2, 2, 2)),
         )
 
-    def test_pad_to_range_ants_matches_array(self, ants_image_3d) -> None:
-        from niiflow.preproc.functional.image.croppad import pad_to_range_ants
-
-        out = pad_to_range_ants(
+    def test_pad_to_range_matches_array(self, ants_image_3d) -> None:
+        out = image_croppad.pad_to_range(
             ants_image_3d, [(2, 1), (0, 3), (1, 1)], constant_values=0
         )
         expected = pad_to_range(
@@ -775,10 +767,10 @@ class TestANTsImageCropPadWrappers:
             _expected_origin(ants_image_3d, (-2, 0, -1)),
         )
 
-    def test_center_pad_ants_matches_array(self, ants_image_3d) -> None:
-        from niiflow.preproc.functional.image.croppad import center_pad_ants
-
-        out_img, pad_ranges = center_pad_ants(ants_image_3d, shape=(12, 12, 12))
+    def test_center_pad_matches_array(self, ants_image_3d) -> None:
+        out_img, pad_ranges = image_croppad.center_pad(
+            ants_image_3d, shape=(12, 12, 12)
+        )
         expected, expected_pad_ranges = center_pad(
             ants_image_3d.numpy(), shape=(12, 12, 12)
         )
@@ -789,14 +781,9 @@ class TestANTsImageCropPadWrappers:
             _expected_origin(ants_image_3d, (-2, -2, -2)),
         )
 
-    def test_chained_crop_pad_ants_mixed(self, ants_image_3d) -> None:
-        from niiflow.preproc.functional.image.croppad import (
-            center_crop_ants,
-            center_pad_ants,
-        )
-
-        cropped_img, _ = center_crop_ants(ants_image_3d, shape=(4, 8, 8))
-        out_img, pad_ranges = center_pad_ants(cropped_img, shape=(4, 10, 8))
+    def test_chained_crop_pad_mixed(self, ants_image_3d) -> None:
+        cropped_img, _ = image_croppad.center_crop(ants_image_3d, shape=(4, 8, 8))
+        out_img, pad_ranges = image_croppad.center_pad(cropped_img, shape=(4, 10, 8))
         arr = ants_image_3d.numpy()
         cropped, crop_ranges = center_crop(arr, shape=(4, 8, 8))
         expected, expected_pad_ranges = center_pad(cropped, shape=(4, 10, 8))
@@ -812,15 +799,10 @@ class TestANTsImageCropPadWrappers:
         )
 
     def test_wrappers_accept_mask_image(self, ants_image_3d, ants_mask_3d) -> None:
-        from niiflow.preproc.functional.image.croppad import (
-            center_crop_ants,
-            center_pad_ants,
-        )
-
-        cropped_img, cropped_ranges = center_crop_ants(
+        cropped_img, cropped_ranges = image_croppad.center_crop(
             ants_image_3d, shape=(4, 4, 4), mask=ants_mask_3d
         )
-        padded_img, padded_ranges = center_pad_ants(
+        padded_img, padded_ranges = image_croppad.center_pad(
             ants_image_3d, shape=(10, 10, 10), mask=ants_mask_3d
         )
 
@@ -841,33 +823,21 @@ class TestANTsImageCropPadWrappers:
         assert padded_ranges == expected_pad_ranges
 
     def test_spacing_and_direction_preserved(self, ants_image_3d) -> None:
-        from niiflow.preproc.functional.image.croppad import (
-            center_crop_ants,
-            center_pad_ants,
-        )
-
-        cropped, _ = center_crop_ants(ants_image_3d, shape=(4, 8, 8))
-        out_img, _ = center_pad_ants(cropped, shape=(4, 10, 8))
+        cropped, _ = image_croppad.center_crop(ants_image_3d, shape=(4, 8, 8))
+        out_img, _ = image_croppad.center_pad(cropped, shape=(4, 10, 8))
         assert tuple(out_img.spacing) == tuple(ants_image_3d.spacing)
         np.testing.assert_allclose(
             np.asarray(out_img.direction), np.asarray(ants_image_3d.direction)
         )
 
-    def test_ants_wrappers_return_ranges(self, ants_image_3d) -> None:
-        from niiflow.preproc.functional.image.croppad import (
-            center_crop_ants,
-            crop_to_mask_ants,
-        )
-
-        _, crop_ranges = crop_to_mask_ants(ants_image_3d)
-        _, center_ranges = center_crop_ants(ants_image_3d, shape=(4, 4, 4))
+    def test_image_wrappers_return_ranges(self, ants_image_3d) -> None:
+        _, crop_ranges = image_croppad.crop_to_mask(ants_image_3d)
+        _, center_ranges = image_croppad.center_crop(ants_image_3d, shape=(4, 4, 4))
         assert len(crop_ranges) == 3
         assert all(len(pair) == 2 for pair in crop_ranges)
         assert len(center_ranges) == 3
 
     def test_non_identity_direction_origin_update(self, ants_mod) -> None:
-        from niiflow.preproc.functional.image.croppad import crop_to_range_ants
-
         arr = np.arange(4 * 4 * 4, dtype=np.float64).reshape(4, 4, 4)
         # 90-degree rotation in the xy-plane.
         direction = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
@@ -877,21 +847,16 @@ class TestANTsImageCropPadWrappers:
             spacing=(1.0, 1.0, 1.0),
             direction=direction,
         )
-        out = crop_to_range_ants(img, [(1, 4), (0, 4), (0, 4)])
+        out = image_croppad.crop_to_range(img, [(1, 4), (0, 4), (0, 4)])
         # voxel offset = (1, 0, 0). new origin = direction @ (1, 0, 0) = (0, 1, 0).
         np.testing.assert_allclose(np.asarray(out.origin), [0.0, 1.0, 0.0])
 
     def test_wrappers_reject_non_image_inputs(self, ants_mod) -> None:
-        from niiflow.preproc.functional.image.croppad import (
-            bbox_from_mask_ants,
-            crop_to_range_ants,
-        )
-
         _ = ants_mod
         with pytest.raises(ValueError, match="ANTsImage"):
-            bbox_from_mask_ants(np.zeros((4, 4), dtype=bool))  # type: ignore[arg-type]
+            image_croppad.bbox_from_mask(np.zeros((4, 4), dtype=bool))  # type: ignore[arg-type]
         with pytest.raises(ValueError, match="ANTsImage"):
-            crop_to_range_ants(
+            image_croppad.crop_to_range(
                 np.zeros((4, 4, 4)),  # type: ignore[arg-type]
                 [(0, 1), (0, 1), (0, 1)],
             )

@@ -1,42 +1,44 @@
 """Functional operations on ANTsImage objects."""
 
-from .bias_field import bias_field_correction_ants
+from .bias_field import ants_bias_field_correction
 from .croppad import (
-    bbox_from_mask_ants,
-    center_crop_ants,
-    center_pad_ants,
-    crop_to_mask_ants,
-    crop_to_range_ants,
-    pad_to_range_ants,
+    bbox_from_mask,
+    center_crop,
+    center_pad,
+    crop_to_mask,
+    crop_to_range,
+    pad_to_range,
 )
-from .denoising import denoise_ants
+from .denoising import ants_denoise
 from .intensity_normalization import (
-    clamp_intensities_ants,
-    minmax_norm_ants,
-    z_transform_norm_ants,
+    clamp_intensities,
+    minmax_norm,
+    z_transform_norm,
 )
-from .pipelines import preprocessing_pipeline_ants
-from .registration import apply_transforms_ants, registration_ants
-from .resampling import resample_ants, resample_to_target_ants
-from .skull_stripping import brain_extraction_ants, mask_image_ants
+from .pipelines import ants_preprocess_brain_image
+from .registration import ants_apply_transforms, ants_registration
+from .reorientation import ants_reorient
+from .resampling import ants_resample, ants_resample_to_target
+from .skull_stripping import ants_brain_extraction, ants_apply_mask
 
 __all__ = [
-    "apply_transforms_ants",
-    "bias_field_correction_ants",
-    "brain_extraction_ants",
-    "clamp_intensities_ants",
-    "z_transform_norm_ants",
-    "minmax_norm_ants",
-    "bbox_from_mask_ants",
-    "crop_to_range_ants",
-    "crop_to_mask_ants",
-    "center_crop_ants",
-    "pad_to_range_ants",
-    "center_pad_ants",
-    "denoise_ants",
-    "mask_image_ants",
-    "preprocessing_pipeline_ants",
-    "registration_ants",
-    "resample_ants",
-    "resample_to_target_ants",
+    "ants_apply_transforms",
+    "ants_bias_field_correction",
+    "ants_brain_extraction",
+    "clamp_intensities",
+    "z_transform_norm",
+    "minmax_norm",
+    "bbox_from_mask",
+    "crop_to_range",
+    "crop_to_mask",
+    "center_crop",
+    "pad_to_range",
+    "center_pad",
+    "ants_denoise",
+    "ants_apply_mask",
+    "ants_preprocess_brain_image",
+    "ants_registration",
+    "ants_reorient",
+    "ants_resample",
+    "ants_resample_to_target",
 ]

@@ -28,6 +28,9 @@ run() {
   fi
 }
 
+echo "Running Black (before Ruff)..."
+run black "${SOURCE_DIRS[@]}"
+
 echo "Running Ruff..."
 run ruff check --fix "${SOURCE_DIRS[@]}"
 

@@ -9,8 +9,8 @@ behaviour of the underlying calls.
 from __future__ import annotations
 
 __all__ = [
-    "mask_image_ants",
-    "brain_extraction_ants",
+    "ants_apply_mask",
+    "ants_brain_extraction",
 ]
 
 from typing import Any
@@ -22,7 +22,7 @@ from antspynet.utilities import brain_extraction
 from .utils import ensure_ants_image
 
 
-def mask_image_ants(**kwargs: Any) -> ANTsImage:
+def ants_apply_mask(**kwargs: Any) -> ANTsImage:
     """Apply a (possibly multi-label) mask to an ANTsImage.
 
     Wraps :func:`ants.mask_image`. All arguments are forwarded as keyword
@@ -41,7 +41,7 @@ def mask_image_ants(**kwargs: Any) -> ANTsImage:
     return mask_image(**kwargs)
 
 
-def brain_extraction_ants(
+def ants_brain_extraction(
     image: ANTsImage,
     modality: str = "t1",
     apply_mask: bool = True,
@@ -95,4 +95,4 @@ def brain_extraction_ants(
         mask = morphology(mask, "close", 6).iMath_fill_holes()
     if not apply_mask:
         return mask
-    return mask_image(image, mask), mask
+    return ants_apply_mask(image=image, mask=mask), mask

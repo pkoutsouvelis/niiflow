@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from niiflow.preproc.functional.image.bias_field import bias_field_correction_ants
+from niiflow.preproc.functional.image.bias_field import ants_bias_field_correction
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ def test_forwards_kwargs_to_n4_bias_field_correction(
         "niiflow.preproc.functional.image.bias_field.n4_bias_field_correction",
         fake_n4_bias_field_correction,
     )
-    out = bias_field_correction_ants(
+    out = ants_bias_field_correction(
         image=ants_image,
         shrink_factor=2,
         return_bias_field=False,

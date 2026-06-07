@@ -4,23 +4,25 @@ def test_import_preproc() -> None:
 
 def test_import_image_wrappers() -> None:
     from niiflow.preproc.functional.image import (
-        apply_transforms_ants,
-        bias_field_correction_ants,
-        brain_extraction_ants,
-        denoise_ants,
-        mask_image_ants,
-        preprocessing_pipeline_ants,
-        registration_ants,
-        resample_ants,
-        resample_to_target_ants,
+        ants_apply_transforms,
+        ants_bias_field_correction,
+        ants_brain_extraction,
+        ants_denoise,
+        ants_apply_mask,
+        ants_registration,
+        ants_reorient,
+        ants_resample,
+        ants_resample_to_target,
+        ants_preprocess_brain_image,
     )
 
-    assert callable(apply_transforms_ants)
-    assert callable(bias_field_correction_ants)
-    assert callable(brain_extraction_ants)
-    assert callable(denoise_ants)
-    assert callable(mask_image_ants)
-    assert callable(preprocessing_pipeline_ants)
-    assert callable(registration_ants)
-    assert callable(resample_ants)
-    assert callable(resample_to_target_ants)
+    assert callable(ants_apply_transforms)
+    assert callable(ants_bias_field_correction)
+    assert callable(ants_brain_extraction)
+    assert callable(ants_denoise)
+    assert callable(ants_apply_mask)
+    assert callable(ants_registration)
+    assert callable(ants_reorient)
+    assert callable(ants_resample)
+    assert callable(ants_resample_to_target)
+    assert callable(ants_preprocess_brain_image)

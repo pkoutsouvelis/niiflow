@@ -8,20 +8,34 @@ documentation for the full behaviour of the underlying call.
 from __future__ import annotations
 
 __all__ = [
-    "preprocessing_pipeline_ants",
+    "ants_preprocess_brain_image",
 ]
 
-from typing import Any
+from typing import Any, Literal, overload
 
 from ants.core import ANTsImage
 from antspynet.utilities import preprocess_brain_image
 
 
-def preprocessing_pipeline_ants(
+@overload
+def ants_preprocess_brain_image(
+    return_metadata: Literal[False],
+    **kwargs: Any,
+) -> ANTsImage: ...
+
+
+@overload
+def ants_preprocess_brain_image(
+    return_metadata: Literal[True],
+    **kwargs: Any,
+) -> tuple[ANTsImage, dict[str, Any]]: ...
+
+
+def ants_preprocess_brain_image(
     return_metadata: bool = True,
     **kwargs: Any,
 ) -> ANTsImage | tuple[ANTsImage, dict[str, Any]]:
-    """Run the ANTsPyNet T1 brain preprocessing pipeline.
+    """Run the ANTsPyNet brain preprocessing pipeline.
 
     Wraps :func:`antspynet.utilities.preprocess_brain_image`, which chains
     optional steps such as intensity truncation, skull-stripping, template

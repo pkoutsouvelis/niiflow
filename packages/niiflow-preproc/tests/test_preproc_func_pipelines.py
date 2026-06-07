@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from niiflow.preproc.functional.image.pipelines import preprocessing_pipeline_ants
+from niiflow.preproc.functional.image.pipelines import ants_preprocess_brain_image
 
 
 @pytest.fixture
@@ -35,7 +35,8 @@ def test_forwards_kwargs_to_preprocess_brain_image(
         "niiflow.preproc.functional.image.pipelines.preprocess_brain_image",
         fake_preprocess_brain_image,
     )
-    result = preprocessing_pipeline_ants(
+    result = ants_preprocess_brain_image(
+        return_metadata=True,
         image=ants_image,
         brain_extraction_modality="t1",
         do_denoising=False,
@@ -60,9 +61,12 @@ def test_return_metadata_false_returns_image_only(
 ) -> None:
     monkeypatch.setattr(
         "niiflow.preproc.functional.image.pipelines.preprocess_brain_image",
-        lambda **kwargs: {"preprocessed_image": ants_image, "brain_mask": kwargs["image"]},
+        lambda **kwargs: {
+            "preprocessed_image": ants_image,
+            "brain_mask": kwargs["image"],
+        },
     )
-    out = preprocessing_pipeline_ants(image=ants_image, return_metadata=False)
+    out = ants_preprocess_brain_image(image=ants_image, return_metadata=False)
 
     assert out is ants_image
 
@@ -81,7 +85,7 @@ def test_return_metadata_true_splits_preprocessed_image_from_auxiliary_outputs(
             "template_transforms": transforms,
         },
     )
-    result = preprocessing_pipeline_ants(image=ants_image)
+    result = ants_preprocess_brain_image(image=ants_image, return_metadata=True)
 
     assert isinstance(result, tuple)
     preprocessed, metadata = result
@@ -100,5 +104,7 @@ def test_raises_when_preprocessed_image_key_missing(
         "niiflow.preproc.functional.image.pipelines.preprocess_brain_image",
         lambda **kwargs: {"brain_mask": ants_image},
     )
-    with pytest.raises(KeyError, match='preprocess_brain_image must return a "preprocessed_image" key'):
-        preprocessing_pipeline_ants(image=ants_image)
+    with pytest.raises(
+        KeyError, match='preprocess_brain_image must return a "preprocessed_image" key'
+    ):
+        ants_preprocess_brain_image(image=ants_image, return_metadata=True)

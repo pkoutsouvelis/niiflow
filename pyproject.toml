@@ -45,6 +45,7 @@ testpaths = [
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: real ANTs / end-to-end stage tests (deselect with '-m \"not integration\"')",
     "viz: marks tests as visualization-only (deselect with '-m \"not viz\"')",
     "serial",
 ]

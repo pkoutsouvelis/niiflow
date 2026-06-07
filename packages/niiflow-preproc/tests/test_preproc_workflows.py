@@ -15,7 +15,8 @@ The workflow API exercised here is:
   attribute via ``monkeypatch``, which is also picklable).
 * ``run()`` (aliased to ``__call__``) catches per-entry exceptions and
   reports them through the status logger; the workflow itself never
-  re-raises a single entry's failure.
+  re-raises a single entry's failure. With ``timeout`` set, overdue entries
+  are reported as ``TIMEOUT`` and processing continues (soft timeout).
 
 The behaviors exercised here are:
 
@@ -41,6 +42,7 @@ picklable for the multi-worker tests.
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import Any, Callable, TypeAlias
 
@@ -109,6 +111,17 @@ def _proc_boom(
 ) -> None:
     """Always raise; used to exercise FAILURE/status-log behavior."""
     raise RuntimeError(f"pipeline boom for {entry.label}")
+
+
+def _proc_sleep_if_label(
+    entry: StagedEntry, pipeline_config: dict[str, Any] | None = None
+) -> None:
+    """Sleep when ``entry.label`` is listed under ``slow_labels`` in config."""
+    cfg = pipeline_config or {}
+    slow_labels = set(cfg.get("slow_labels", ()))
+    if entry.label in slow_labels:
+        time.sleep(float(cfg.get("sleep_seconds", 3.0)))
+    _proc_touch_sentinel(entry, pipeline_config)
 
 
 def _proc_log_info(
@@ -270,6 +283,21 @@ class TestWorkflowConstruction:
 
         assert isinstance(wf.num_workers, int)  # type: ignore[attr-defined]
         assert wf.num_workers >= 1  # type: ignore[attr-defined]
+
+    def test_init_rejects_invalid_timeout(
+        self, workflow_cls: WorkflowFactory, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "a.nii.gz"
+        f.write_bytes(b"")
+
+        with pytest.raises(ValueError, match="timeout"):
+            workflow_cls(files=f, num_workers=1, timeout=0)
+
+        with pytest.raises(ValueError, match="timeout"):
+            workflow_cls(files=f, num_workers=1, timeout=-1.0)
+
+        with pytest.raises(ValueError, match="timeout"):
+            workflow_cls(files=f, num_workers=1, timeout="60")  # type: ignore[arg-type]
 
     def test_root_is_read_only_via_assignment(
         self, workflow_cls: WorkflowFactory, tmp_path: Path
@@ -695,6 +723,83 @@ class TestWorkflowMultiWorkerExecution:
         status = (logs_dir / "status.log").read_text(encoding="utf-8")
         failure_lines = [line for line in status.splitlines() if "FAILURE" in line]
         assert len(failure_lines) == len(wf.files)
+
+
+# ---------------------------------------------------------------------------
+# Soft per-entry timeout
+# ---------------------------------------------------------------------------
+
+
+class TestWorkflowTimeout:
+    """``timeout`` records overdue entries as TIMEOUT and continues the run."""
+
+    def test_serial_run_records_timeout_and_continues(
+        self,
+        workflow_cls: WorkflowFactory,
+        tmp_path: Path,
+        logs_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fast = tmp_path / "fast.nii.gz"
+        slow = tmp_path / "slow.nii.gz"
+        fast.write_bytes(b"")
+        slow.write_bytes(b"")
+
+        sentinels = tmp_path / "sentinels"
+        wf = workflow_cls(
+            files=[fast, slow],
+            pipeline_config={
+                "out_dir": str(sentinels),
+                "slow_labels": (str(slow),),
+                "sleep_seconds": 2.0,
+            },
+            num_workers=1,
+            logs_root=logs_dir,
+            timeout=0.5,
+        )
+        monkeypatch.setattr(wf, "process_single", _proc_sleep_if_label)
+
+        wf.run()  # must not raise
+
+        status = (logs_dir / "status.log").read_text(encoding="utf-8")
+        assert f"{fast} | SUCCESS" in status
+        assert f"{slow} | TIMEOUT" in status
+        assert "exceeded 0.5s" in status
+        assert "fast.nii.gz.done" in {p.name for p in sentinels.iterdir()}
+
+    def test_parallel_run_records_timeout_and_continues(
+        self,
+        workflow_cls: WorkflowFactory,
+        tmp_path: Path,
+        logs_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fast = tmp_path / "fast.nii.gz"
+        slow = tmp_path / "slow.nii.gz"
+        fast.write_bytes(b"")
+        slow.write_bytes(b"")
+
+        sentinels = tmp_path / "sentinels"
+        wf = workflow_cls(
+            files=[fast, slow],
+            pipeline_config={
+                "out_dir": str(sentinels),
+                "slow_labels": (str(slow),),
+                "sleep_seconds": 5.0,
+            },
+            num_workers=2,
+            logs_root=logs_dir,
+            timeout=2.0,
+        )
+        monkeypatch.setattr(wf, "process_single", _proc_sleep_if_label)
+
+        wf.run()  # must not raise
+
+        status = (logs_dir / "status.log").read_text(encoding="utf-8")
+        assert f"{fast} | SUCCESS" in status
+        assert f"{slow} | TIMEOUT" in status
+        assert "exceeded 2.0s" in status
+        assert "fast.nii.gz.done" in {p.name for p in sentinels.iterdir()}
 
 
 # ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@ behaviour of the underlying call.
 from __future__ import annotations
 
 __all__ = [
-    "bias_field_correction_ants",
+    "ants_bias_field_correction",
 ]
 
 from typing import Any
@@ -17,7 +17,7 @@ from ants.core import ANTsImage
 from ants.ops import n4_bias_field_correction
 
 
-def bias_field_correction_ants(**kwargs: Any) -> ANTsImage:
+def ants_bias_field_correction(**kwargs: Any) -> ANTsImage:
     """Correct the bias field of an ANTsImage using the N4 algorithm.
 
     Wraps :func:`ants.n4_bias_field_correction`. All arguments are forwarded

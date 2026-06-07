@@ -10,8 +10,8 @@ behaviour of the underlying calls.
 from __future__ import annotations
 
 __all__ = [
-    "apply_transforms_ants",
-    "registration_ants",
+    "ants_apply_transforms",
+    "ants_registration",
 ]
 
 from typing import Any
@@ -23,7 +23,7 @@ from ants.registration import apply_transforms
 from .utils import ensure_ants_image, reject_reserved_kwargs
 
 
-def apply_transforms_ants(
+def ants_apply_transforms(
     image: ANTsImage,
     target: ANTsImage,
     interpolation: str = "linear",
@@ -34,7 +34,7 @@ def apply_transforms_ants(
     Wraps :func:`ants.apply_transforms`, mapping the moving `image` onto the
     fixed `target` grid. The list of transforms is supplied through
     `kwargs` as ``transformlist`` (a list of transform filenames, as produced
-    by :func:`registration_ants`).
+    by :func:`ants_registration`).
 
     Args:
         image:
@@ -62,7 +62,7 @@ def apply_transforms_ants(
     ensure_ants_image(image)
     ensure_ants_image(target, name="target")
     reject_reserved_kwargs(
-        kwargs, ("fixed", "moving", "interpolator"), func_name="apply_transforms_ants"
+        kwargs, ("fixed", "moving", "interpolator"), func_name="ants_apply_transforms"
     )
     return apply_transforms(
         fixed=target,
@@ -72,7 +72,7 @@ def apply_transforms_ants(
     )
 
 
-def registration_ants(
+def ants_registration(
     image: ANTsImage,
     target: ANTsImage,
     mode: str = "Affine",
@@ -124,7 +124,7 @@ def registration_ants(
     reject_reserved_kwargs(
         kwargs,
         ("fixed", "moving", "type_of_transform"),
-        func_name="registration_ants",
+        func_name="ants_registration",
     )
     reg = registration(fixed=target, moving=image, type_of_transform=mode, **kwargs)
     result = {

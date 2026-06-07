@@ -7,8 +7,8 @@ import pytest
 
 from niiflow.preproc.functional.image.resampling import (
     _RESAMPLE_INTERP_CODES,
-    resample_ants,
-    resample_to_target_ants,
+    ants_resample,
+    ants_resample_to_target,
 )
 
 
@@ -44,7 +44,7 @@ class TestResampleAnts:
             "niiflow.preproc.functional.image.resampling.resample_image",
             fake_resample_image,
         )
-        out = resample_ants(
+        out = ants_resample(
             ants_image,
             resample_params=(1.0, 1.0),
             use_voxels=True,
@@ -63,11 +63,11 @@ class TestResampleAnts:
 
     def test_rejects_invalid_interpolation(self, ants_image) -> None:
         with pytest.raises(ValueError, match="Invalid interpolation"):
-            resample_ants(ants_image, resample_params=(1.0, 1.0), interpolation="lanczos")  # type: ignore[arg-type]
+            ants_resample(ants_image, resample_params=(1.0, 1.0), interpolation="lanczos")  # type: ignore[arg-type]
 
     def test_rejects_non_image_input(self) -> None:
         with pytest.raises(ValueError, match="ANTsImage"):
-            resample_ants(np.zeros((4, 5)), resample_params=(1.0, 1.0))  # type: ignore[arg-type]
+            ants_resample(np.zeros((4, 5)), resample_params=(1.0, 1.0))  # type: ignore[arg-type]
 
 
 class TestResampleToTargetAnts:
@@ -85,7 +85,7 @@ class TestResampleToTargetAnts:
             "niiflow.preproc.functional.image.resampling.resample_image_to_target",
             fake_resample_image_to_target,
         )
-        out = resample_to_target_ants(
+        out = ants_resample_to_target(
             ants_image,
             target,
             interpolation="nearestNeighbor",
@@ -105,8 +105,8 @@ class TestResampleToTargetAnts:
     def test_rejects_reserved_kwargs(self, ants_image) -> None:
         target = ants_image.clone()
         with pytest.raises(TypeError, match="does not accept .* via `kwargs`"):
-            resample_to_target_ants(ants_image, target, interp_type="linear")
+            ants_resample_to_target(ants_image, target, interp_type="linear")
 
     def test_rejects_non_image_target(self, ants_image) -> None:
         with pytest.raises(ValueError, match="`target` must be an ANTsImage"):
-            resample_to_target_ants(ants_image, np.zeros((4, 5)))  # type: ignore[arg-type]
+            ants_resample_to_target(ants_image, np.zeros((4, 5)))  # type: ignore[arg-type]

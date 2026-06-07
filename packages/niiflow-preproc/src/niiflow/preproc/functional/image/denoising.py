@@ -8,7 +8,7 @@ the ANTsPy documentation for the full behaviour of the underlying call.
 from __future__ import annotations
 
 __all__ = [
-    "denoise_ants",
+    "ants_denoise",
 ]
 
 from typing import Any
@@ -17,7 +17,7 @@ from ants.core import ANTsImage
 from ants.ops import denoise_image
 
 
-def denoise_ants(**kwargs: Any) -> ANTsImage:
+def ants_denoise(**kwargs: Any) -> ANTsImage:
     """Denoise an ANTsImage using ANTs adaptive non-local means.
 
     Wraps :func:`ants.denoise_image`. All arguments are forwarded as keyword

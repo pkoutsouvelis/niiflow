@@ -10,13 +10,21 @@ from abc import ABC, abstractmethod
 from typing import Callable, Any, Literal
 from pathlib import Path
 import multiprocessing
-from concurrent.futures import ProcessPoolExecutor, as_completed
+import time
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    Future,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    as_completed,
+    wait,
+)
 import traceback
 from dataclasses import dataclass
 
 from niiflow.preproc.utils.file import resolve_path
 from niiflow.preproc.data import get_data_explorer
-from niiflow.preproc.workflows.logging_manager import LoggingManager
+from niiflow.preproc.workflows.logging_manager import LoggingManager, ParallelLogging
 from niiflow.preproc.workflows.logging_utils import (
     set_input_file_context,
     reset_input_file_context,
@@ -125,6 +133,10 @@ class PreprocessingWorkflow(ABC):
             `logs_root` is provided.
         dev_mode (bool): Whether to enable debug mode. Activates debug-level
             logging for worker processes.
+        timeout (float | None): Soft per-entry time limit in seconds. When set,
+            entries that exceed the limit are recorded as ``TIMEOUT`` in the
+            status log and processing continues with remaining entries. Worker
+            processes are not terminated.
     """
 
     def __init__(
@@ -138,6 +150,7 @@ class PreprocessingWorkflow(ABC):
         status_logs: bool = True,
         worker_logs: bool = True,
         dev_mode: bool = False,
+        timeout: float | None = None,
     ) -> None:
         self._logging_manager = LoggingManager(
             logs_root=logs_root,
@@ -152,6 +165,7 @@ class PreprocessingWorkflow(ABC):
         self.staging_config = staging_config
         self.pipeline_config = pipeline_config
         self.num_workers = num_workers
+        self.timeout = timeout
 
     @property
     def files(self) -> list[Path]:
@@ -172,6 +186,10 @@ class PreprocessingWorkflow(ABC):
     @property
     def num_workers(self) -> int | Literal["auto"]:
         return self._num_workers
+
+    @property
+    def timeout(self) -> float | None:
+        return self._timeout
 
     @files.setter
     def files(self, files: InputData) -> None:
@@ -215,6 +233,18 @@ class PreprocessingWorkflow(ABC):
             raise ValueError(
                 f"`num_workers` must be 'auto' or an integer, got `{num_workers}`"
             )
+
+    @timeout.setter
+    def timeout(self, timeout: float | None) -> None:
+        if timeout is not None:
+            if not isinstance(timeout, (int, float)):
+                raise ValueError(
+                    f"`timeout` must be a number or None, got {type(timeout).__name__}"
+                )
+            if timeout <= 0:
+                raise ValueError(f"`timeout` must be positive, got `{timeout}`")
+            timeout = float(timeout)
+        self._timeout = timeout
 
     def _resolve_files(self, files: InputData) -> tuple[Path | None, list[Path]]:
         if isinstance(files, (Path, str)):
@@ -279,6 +309,93 @@ class PreprocessingWorkflow(ABC):
     ) -> None:
         self._status_logger.info(message)
 
+    def _report_future_result(self, fut: Future[None], entry: StagedEntry) -> None:
+        """Map a completed future to a status-log line."""
+        try:
+            if self._timeout is not None:
+                fut.result(timeout=self._timeout)
+            else:
+                fut.result()
+            self.status(f"{entry} | SUCCESS")
+        except TimeoutError:
+            self.status(f"{entry} | TIMEOUT | exceeded {self._timeout}s")
+        except Exception:
+            tb = traceback.format_exc().strip().replace("\n", "\n  ")
+            self.status(f"{entry} | FAILURE | {tb}")
+
+    def _run_serial(self, entries: list[StagedEntry]) -> None:
+        if self._timeout is None:
+            for entry in entries:
+                try:
+                    _execute_one(self.process_single, entry, self._pipeline_config)
+                    self.status(f"{entry} | SUCCESS")
+                except Exception:
+                    tb = traceback.format_exc().strip().replace("\n", "\n  ")
+                    self.status(f"{entry} | FAILURE | {tb}")
+            return
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            for entry in entries:
+                fut = executor.submit(
+                    _execute_one,
+                    self.process_single,
+                    entry,
+                    self._pipeline_config,
+                )
+                self._report_future_result(fut, entry)
+
+    def _run_parallel(
+        self, entries: list[StagedEntry], parallel: ParallelLogging
+    ) -> None:
+        with ProcessPoolExecutor(
+            max_workers=self._num_workers,
+            initializer=parallel.worker_init_fn,
+        ) as pool:
+            futures = {
+                pool.submit(
+                    _execute_one,
+                    self.process_single,
+                    entry,
+                    self._pipeline_config,
+                ): entry
+                for entry in entries
+            }
+            if self._timeout is None:
+                for fut in as_completed(futures):
+                    self._report_future_result(fut, futures[fut])
+                return
+
+            # as_completed only yields finished futures; poll so hung entries
+            # can be marked TIMEOUT while others continue (soft timeout).
+            # Looping naively over futures would address this but without
+            # completion-order handling and responsive status updates.
+            submit_times = {fut: time.monotonic() for fut in futures}
+            handled: set[Future[None]] = set()
+            poll_interval = min(0.5, self._timeout / 10)
+
+            while len(handled) < len(futures):
+                remaining = {
+                    fut: entry for fut, entry in futures.items() if fut not in handled
+                }
+                done, not_done = wait(
+                    remaining.keys(),
+                    timeout=poll_interval,
+                    return_when=FIRST_COMPLETED,
+                )
+                for fut in done:
+                    if fut in handled:
+                        continue
+                    self._report_future_result(fut, remaining[fut])
+                    handled.add(fut)
+
+                now = time.monotonic()
+                for fut in not_done:
+                    if now - submit_times[fut] > self._timeout:
+                        entry = remaining[fut]
+                        # Parent stops waiting; the worker process is not terminated.
+                        self.status(f"{entry} | TIMEOUT | exceeded {self._timeout}s")
+                        handled.add(fut)
+
     def run(self) -> None:
         self.log(
             f"Starting workflow with {len(self.files)} files, {self._num_workers} workers"
@@ -297,35 +414,9 @@ class PreprocessingWorkflow(ABC):
             self._logging_manager.setup_parallel_logging() as parallel
         ):  # listener starts, stops on exit
             if self._num_workers <= 1:
-                for entry in entries:
-                    try:
-                        _execute_one(self.process_single, entry, self._pipeline_config)
-                        self.status(f"{entry} | SUCCESS")
-                    except Exception:
-                        tb = traceback.format_exc().strip().replace("\n", "\n  ")
-                        self.status(f"{entry} | FAILURE | {tb}")
+                self._run_serial(entries)
             else:
-                with ProcessPoolExecutor(
-                    max_workers=self._num_workers,
-                    initializer=parallel.worker_init_fn,
-                ) as pool:
-                    futures = {
-                        pool.submit(
-                            _execute_one,
-                            self.process_single,
-                            entry,
-                            self._pipeline_config,
-                        ): entry
-                        for entry in entries
-                    }
-                    for fut in as_completed(futures):
-                        entry = futures[fut]
-                        try:
-                            fut.result()
-                            self.status(f"{entry} | SUCCESS")
-                        except Exception:
-                            tb = traceback.format_exc().strip().replace("\n", "\n  ")
-                            self.status(f"{entry} | FAILURE | {tb}")
+                self._run_parallel(entries, parallel)
 
         self.log("Workflow complete")
 
@@ -382,6 +473,7 @@ class PreprocessFiles(PreprocessingWorkflow):
         status_logs: bool = True,
         worker_logs: bool = True,
         dev_mode: bool = False,
+        timeout: float | None = None,
     ) -> None:
         super().__init__(
             files,
@@ -393,6 +485,7 @@ class PreprocessFiles(PreprocessingWorkflow):
             status_logs=status_logs,
             worker_logs=worker_logs,
             dev_mode=dev_mode,
+            timeout=timeout,
         )
 
     def stage(

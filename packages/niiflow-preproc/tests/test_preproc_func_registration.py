@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 
 from niiflow.preproc.functional.image.registration import (
-    apply_transforms_ants,
-    registration_ants,
+    ants_apply_transforms,
+    ants_registration,
 )
 
 
@@ -36,7 +36,7 @@ class TestApplyTransformsAnts:
             "niiflow.preproc.functional.image.registration.apply_transforms",
             fake_apply_transforms,
         )
-        out = apply_transforms_ants(
+        out = ants_apply_transforms(
             ants_image,
             target,
             interpolation="linear",
@@ -56,7 +56,7 @@ class TestApplyTransformsAnts:
     def test_rejects_reserved_kwargs(self, ants_image) -> None:
         target = ants_image.clone()
         with pytest.raises(TypeError, match="does not accept .* via `kwargs`"):
-            apply_transforms_ants(ants_image, target, fixed=target)
+            ants_apply_transforms(ants_image, target, fixed=target)
 
 
 class TestRegistrationAnts:
@@ -87,7 +87,7 @@ class TestRegistrationAnts:
             "niiflow.preproc.functional.image.registration.apply_transforms",
             fake_apply_transforms,
         )
-        out = registration_ants(
+        out = ants_registration(
             ants_image,
             target,
             mode="Rigid",
@@ -135,7 +135,7 @@ class TestRegistrationAnts:
             "niiflow.preproc.functional.image.registration.apply_transforms",
             fake_apply_transforms,
         )
-        result = registration_ants(
+        result = ants_registration(
             ants_image,
             target,
             mode="Affine",
@@ -158,4 +158,4 @@ class TestRegistrationAnts:
     def test_rejects_reserved_kwargs(self, ants_image) -> None:
         target = ants_image.clone()
         with pytest.raises(TypeError, match="does not accept .* via `kwargs`"):
-            registration_ants(ants_image, target, type_of_transform="SyN")
+            ants_registration(ants_image, target, type_of_transform="SyN")

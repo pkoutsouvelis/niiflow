@@ -34,6 +34,9 @@ from niiflow.preproc.functional.array.intensity_normalization import (
     minmax_norm,
     z_transform_norm,
 )
+from niiflow.preproc.functional.image import (
+    intensity_normalization as image_intensity_normalization,
+)
 
 # ---------------------------------------------------------------------------
 # Shared fixtures.
@@ -438,65 +441,49 @@ def ants_mod():
     return pytest.importorskip("ants")
 
 
-class TestANTsImageNormalizationWrappers:
-    """ANTsImage wrappers should mirror array behavior and preserve metadata."""
+class TestImageIntensityNormalization:
+    """Image-layer normalization must mirror array behavior and preserve metadata."""
 
-    def test_clamp_intensities_ants_matches_array_function(self, ants_mod) -> None:
-        from niiflow.preproc.functional.image.intensity_normalization import (
-            clamp_intensities_ants,
-        )
-
+    def test_clamp_intensities_matches_array_function(self, ants_mod) -> None:
         arr = np.array(
             [[-100.0, 1.0, 2.0], [3.0, 4.0, 5.0], [6.0, 7.0, 100.0]],
             dtype=np.float64,
         )
         img = ants_mod.from_numpy(arr)
 
-        out_img = clamp_intensities_ants(img, lower_pct=10.0, upper_pct=90.0)
+        out_img = image_intensity_normalization.clamp_intensities(
+            img, lower_pct=10.0, upper_pct=90.0
+        )
         expected = clamp_intensities(arr, lower_pct=10.0, upper_pct=90.0)
 
         np.testing.assert_allclose(out_img.numpy(), expected)
         assert out_img.shape == img.shape
 
-    def test_z_transform_norm_ants_matches_array_function(self, ants_mod) -> None:
-        from niiflow.preproc.functional.image.intensity_normalization import (
-            z_transform_norm_ants,
-        )
-
+    def test_z_transform_norm_matches_array_function(self, ants_mod) -> None:
         arr = np.array(
             [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]],
             dtype=np.float64,
         )
         img = ants_mod.from_numpy(arr)
 
-        out_img = z_transform_norm_ants(img)
+        out_img = image_intensity_normalization.z_transform_norm(img)
         expected = z_transform_norm(arr)
 
         np.testing.assert_allclose(out_img.numpy(), expected)
 
-    def test_minmax_norm_ants_matches_array_function(self, ants_mod) -> None:
-        from niiflow.preproc.functional.image.intensity_normalization import (
-            minmax_norm_ants,
-        )
-
+    def test_minmax_norm_matches_array_function(self, ants_mod) -> None:
         arr = np.array(
             [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]],
             dtype=np.float64,
         )
         img = ants_mod.from_numpy(arr)
 
-        out_img = minmax_norm_ants(img)
+        out_img = image_intensity_normalization.minmax_norm(img)
         expected = minmax_norm(arr)
 
         np.testing.assert_allclose(out_img.numpy(), expected)
 
-    def test_ants_wrappers_accept_limit_to_mask(self, ants_mod) -> None:
-        from niiflow.preproc.functional.image.intensity_normalization import (
-            clamp_intensities_ants,
-            minmax_norm_ants,
-            z_transform_norm_ants,
-        )
-
+    def test_image_wrappers_accept_limit_to_mask(self, ants_mod) -> None:
         arr = np.array(
             [[-100.0, 1.0, 2.0], [3.0, 4.0, 5.0], [6.0, 7.0, 100.0]],
             dtype=np.float64,
@@ -508,11 +495,11 @@ class TestANTsImageNormalizationWrappers:
         img = ants_mod.from_numpy(arr)
         mask_img = ants_mod.from_numpy(mask_arr)
 
-        clamped = clamp_intensities_ants(
+        clamped = image_intensity_normalization.clamp_intensities(
             img, lower_pct=25.0, upper_pct=75.0, limit_to=mask_img
         )
-        zed = z_transform_norm_ants(img, limit_to=mask_img)
-        minmaxed = minmax_norm_ants(img, limit_to=mask_img)
+        zed = image_intensity_normalization.z_transform_norm(img, limit_to=mask_img)
+        minmaxed = image_intensity_normalization.minmax_norm(img, limit_to=mask_img)
 
         np.testing.assert_allclose(
             clamped.numpy(),
@@ -525,11 +512,7 @@ class TestANTsImageNormalizationWrappers:
             minmaxed.numpy(), minmax_norm(arr, limit_to=mask_arr)
         )
 
-    def test_ants_wrappers_preserve_metadata(self, ants_mod) -> None:
-        from niiflow.preproc.functional.image.intensity_normalization import (
-            minmax_norm_ants,
-        )
-
+    def test_image_wrappers_preserve_metadata(self, ants_mod) -> None:
         arr = np.array(
             [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]],
             dtype=np.float64,
@@ -542,7 +525,7 @@ class TestANTsImageNormalizationWrappers:
             direction=direction,
         )
 
-        out_img = minmax_norm_ants(img)
+        out_img = image_intensity_normalization.minmax_norm(img)
 
         assert tuple(out_img.origin) == tuple(img.origin)
         assert tuple(out_img.spacing) == tuple(img.spacing)
@@ -550,11 +533,9 @@ class TestANTsImageNormalizationWrappers:
             np.asarray(out_img.direction), np.asarray(img.direction)
         )
 
-    def test_ants_wrappers_reject_non_image_inputs(self, ants_mod) -> None:
-        from niiflow.preproc.functional.image.intensity_normalization import (
-            clamp_intensities_ants,
-        )
-
+    def test_image_wrappers_reject_non_image_inputs(self, ants_mod) -> None:
         _ = ants_mod  # keep fixture usage explicit for skip behavior
         with pytest.raises(ValueError, match="ANTsImage"):
-            clamp_intensities_ants(np.array([1, 2, 3]))  # type: ignore[arg-type]
+            image_intensity_normalization.clamp_intensities(
+                np.array([1, 2, 3])  # type: ignore[arg-type]
+            )

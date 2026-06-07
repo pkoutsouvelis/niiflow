@@ -9,8 +9,8 @@ of the underlying calls.
 from __future__ import annotations
 
 __all__ = [
-    "resample_ants",
-    "resample_to_target_ants",
+    "ants_resample",
+    "ants_resample_to_target",
 ]
 
 from typing import Any, Literal, Sequence, cast
@@ -48,7 +48,7 @@ TargetInterpolation = Literal[
 ]
 
 
-def resample_ants(
+def ants_resample(
     image: ANTsImage,
     resample_params: Sequence[int | float],
     use_voxels: bool = False,
@@ -98,7 +98,7 @@ def resample_ants(
     )
 
 
-def resample_to_target_ants(
+def ants_resample_to_target(
     image: ANTsImage,
     target: ANTsImage,
     interpolation: TargetInterpolation = "linear",
@@ -139,7 +139,7 @@ def resample_to_target_ants(
     ensure_ants_image(image)
     ensure_ants_image(target, name="target")
     reject_reserved_kwargs(
-        kwargs, ("image", "target", "interp_type"), func_name="resample_to_target_ants"
+        kwargs, ("image", "target", "interp_type"), func_name="ants_resample_to_target"
     )
     return cast(
         ANTsImage,

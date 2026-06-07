@@ -38,7 +38,7 @@ InputData: TypeAlias = Path | str | Sequence[Path | str] | NiftiFinderConfig
 
 
 # ---------------------------------------------------------------------------
-# Processing Stage: Relative file discovery types
+# Pipeline Stage: Relative file discovery types
 # ---------------------------------------------------------------------------
 
 
@@ -95,7 +95,7 @@ class ContextRootSource(TypedDict):
     """Resolve root from a path stored in PipelineContext.
 
     Examples:
-        {"kind": "context", "value": "ctx.input_root"}
+        {"kind": "context", "value": "ctx.run_id"}
         {"kind": "context", "value": "ctx.artifacts.skullstrip_dir"}
         {"kind": "context", "value": "ctx.metadata.template_root"}
     """
@@ -163,7 +163,7 @@ class ContextPathInputSpec(TypedDict, total=False):
     Example values:
         ctx.artifacts.brain_mask
         ctx.metadata.template_path
-        ctx.state.current_file
+        ctx.run_id
     """
 
     kind: Literal["context"]
@@ -207,7 +207,8 @@ class SearchInputSpec(TypedDict, total=False):
 
     root:
         Directory root for searching.
-        Defaults to active_file.parent if omitted.
+        Defaults to the parent of the path identified by ``ctx.run_id`` when
+        that value is a filesystem path; otherwise omitted.
 
     search:
         Either suffix-based discovery or nifti-finder-based discovery.

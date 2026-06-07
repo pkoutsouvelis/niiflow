@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 
 from niiflow.preproc.functional.image.skull_stripping import (
-    brain_extraction_ants,
-    mask_image_ants,
+    ants_brain_extraction,
+    ants_apply_mask,
 )
 
 
@@ -29,21 +29,21 @@ class _MorphResult:
         return self._mask
 
 
-def test_mask_image_ants_forwards_kwargs(
+def test_ants_apply_mask_forwards_kwargs(
     ants_image, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     mask = ants_image.clone()
     calls: list[dict] = []
 
-    def fake_mask_image(**kwargs):
+    def fake_apply_mask(**kwargs):
         calls.append(kwargs)
         return ants_image
 
     monkeypatch.setattr(
         "niiflow.preproc.functional.image.skull_stripping.mask_image",
-        fake_mask_image,
+        fake_apply_mask,
     )
-    out = mask_image_ants(image=ants_image, mask=mask, level=1, binarize=True)
+    out = ants_apply_mask(image=ants_image, mask=mask, level=1, binarize=True)
 
     assert calls == [
         {
@@ -59,7 +59,7 @@ def test_mask_image_ants_forwards_kwargs(
 class TestBrainExtractionAnts:
     def test_rejects_non_image_input(self) -> None:
         with pytest.raises(ValueError, match="ANTsImage"):
-            brain_extraction_ants(np.zeros((4, 5)))  # type: ignore[arg-type]
+            ants_brain_extraction(np.zeros((4, 5)))  # type: ignore[arg-type]
 
     @pytest.mark.parametrize("modality", ["t1", "t2", "flair"])
     def test_default_modality_thresholds_and_morphs_probability_map(
@@ -98,7 +98,7 @@ class TestBrainExtractionAnts:
             "niiflow.preproc.functional.image.skull_stripping.morphology",
             fake_morphology,
         )
-        result = brain_extraction_ants(
+        result = ants_brain_extraction(
             ants_image,
             modality=modality,
             verbose=True,
@@ -135,7 +135,7 @@ class TestBrainExtractionAnts:
             "niiflow.preproc.functional.image.skull_stripping.morphology",
             lambda *args, **kwargs: morphology_calls.append((args, kwargs)),
         )
-        out = brain_extraction_ants(
+        out = ants_brain_extraction(
             ants_image, modality="t1threetissue", apply_mask=False
         )
 
@@ -166,7 +166,7 @@ class TestBrainExtractionAnts:
             "niiflow.preproc.functional.image.skull_stripping.morphology",
             lambda *args, **kwargs: morphology_calls.append((args, kwargs)),
         )
-        out = brain_extraction_ants(ants_image, modality="t1combined", apply_mask=False)
+        out = ants_brain_extraction(ants_image, modality="t1combined", apply_mask=False)
 
         assert threshold_calls == [(bet, 2, 3, 1, 0)]
         assert morphology_calls == []
@@ -190,6 +190,6 @@ class TestBrainExtractionAnts:
             "niiflow.preproc.functional.image.skull_stripping.morphology",
             lambda image, op, radius: _MorphResult(mask),
         )
-        out = brain_extraction_ants(ants_image, apply_mask=False)
+        out = ants_brain_extraction(ants_image, apply_mask=False)
 
         assert out is mask

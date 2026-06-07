@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from niiflow.preproc.functional.image.denoising import denoise_ants
+from niiflow.preproc.functional.image.denoising import ants_denoise
 
 
 @pytest.fixture
@@ -32,7 +32,7 @@ def test_forwards_kwargs_to_denoise_image(
         "niiflow.preproc.functional.image.denoising.denoise_image",
         fake_denoise_image,
     )
-    out = denoise_ants(
+    out = ants_denoise(
         image=ants_image,
         mask=mask,
         noise_model="Rician",
