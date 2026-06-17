@@ -4,16 +4,16 @@ __all__ = [
     "create_workflow",
     "discover_workflow_classes",
     "DynamicPreprocessingWorkflow",
-    "FileDiscoveryMixin",
     "InputData",
     "PlanningWorkflow",
     "ProcessingWorkflow",
     "RunPlan",
-    "StagingMixin",
+    "SupportsFileDiscovery",
+    "SupportsStaging",
 ]
 
 from .dynamic_workflow import DynamicPreprocessingWorkflow
 from .plan import RunPlan
-from .mixins import FileDiscoveryMixin, InputData, StagingMixin
+from .mixins import SupportsFileDiscovery, InputData, SupportsStaging
 from .workflow import PlanningWorkflow, ProcessingWorkflow
 from .workflow_factory import create_workflow, discover_workflow_classes

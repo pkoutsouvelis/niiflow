@@ -14,14 +14,14 @@ from niiflow.preproc.staging import StagedEntry
 from niiflow.preproc.pipelines import create_pipeline
 from niiflow.preproc.pipelines.pipeline_stages import RuntimeContext
 
-from .mixins import FileDiscoveryMixin, InputData, StagingMixin
+from .mixins import SupportsFileDiscovery, SupportsStaging, InputData
 from .plan import RunPlan
 from .workflow import PlanningWorkflow
 
 
 class DynamicPreprocessingWorkflow(
-    FileDiscoveryMixin,
-    StagingMixin,
+    SupportsFileDiscovery,
+    SupportsStaging,
     PlanningWorkflow,
 ):
     """File-driven preprocessing workflow with dynamic pipeline execution.

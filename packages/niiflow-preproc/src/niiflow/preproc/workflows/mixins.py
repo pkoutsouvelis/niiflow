@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 __all__ = [
-    "FileDiscoveryMixin",
     "InputData",
-    "StagingMixin",
+    "SupportsFileDiscovery",
+    "SupportsStaging",
 ]
 
 from copy import deepcopy
@@ -20,7 +20,7 @@ from niiflow.preproc.staging import StagedEntry, Stager, make_entries, create_st
 InputData: TypeAlias = Path | str | Sequence[Path | str]
 
 
-class FileDiscoveryMixin:
+class SupportsFileDiscovery:
     """Discover *active files* that anchor each processing entry.
 
     An **active file** is the canonical path for one unit of work — the file
@@ -128,7 +128,7 @@ class FileDiscoveryMixin:
         if not callable(log):
             raise AttributeError(
                 f"{type(self).__name__} must inherit from ProcessingWorkflow; "
-                "FileDiscoveryMixin relies on its log() method."
+                "SupportsFileDiscovery relies on its log() method."
             )
 
         found: list[Path] = []
@@ -157,7 +157,7 @@ class FileDiscoveryMixin:
         return unique
 
 
-class StagingMixin:
+class SupportsStaging:
     """Build :class:`~niiflow.preproc.staging.StagedEntry` objects and run stagers.
 
     Processing revolves around **active files** as stable anchors. Each active
@@ -241,7 +241,7 @@ class StagingMixin:
         if not callable(log):
             raise AttributeError(
                 f"{type(self).__name__} must inherit from ProcessingWorkflow; "
-                "StagingMixin relies on its log() method."
+                "SupportsStaging relies on its log() method."
             )
         log(f"Staging {len(active_files)} entries...")
         entries = make_entries(active_files, self._entry_params)

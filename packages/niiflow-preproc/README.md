@@ -462,7 +462,7 @@ niiflow-preproc/
     │   ├── workflow.py               # ProcessingWorkflow / PlanningWorkflow (execution engine)
     │   ├── dynamic_workflow.py       # DynamicPreprocessingWorkflow
     │   ├── workflow_factory.py       # create_workflow / discovery
-    │   ├── mixins.py                 # FileDiscoveryMixin / StagingMixin
+    │   ├── mixins.py                 # SupportsFileDiscovery / SupportsStaging
     │   ├── plan.py                   # RunPlan (.duckdb / .json persistence)
     │   ├── logging_manager.py        # main / status / parallel logging
     │   └── logging_utils.py
