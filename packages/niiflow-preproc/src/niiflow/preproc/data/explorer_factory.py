@@ -12,7 +12,7 @@ from typing import Any, Sequence, cast
 from nifti_finder.explorers import AllPurposeFileExplorer
 from nifti_finder.filters import Filter
 
-from niiflow.preproc.utils._types import FilterConfig, ComposeFilterKwargs
+from .types import FilterConfig, ComposeFilterKwargs, DataExplorer
 
 _FILTER_MODULES: tuple[str, ...] = ("nifti_finder.filters",)
 
@@ -74,9 +74,9 @@ def _build_filter(filters: FilterConfig | None) -> Filter | None:
 
 
 def get_data_explorer(
-    pattern: str | Sequence[str],
+    pattern: str | Sequence[str] | None = None,
     filter_kwargs: FilterConfig | None = None,
-) -> AllPurposeFileExplorer:
+) -> DataExplorer:
     """Instantiate nifti-finder's `AllPurposeFileExplorer` with user-provided settings.
 
     Args:
@@ -86,6 +86,7 @@ def get_data_explorer(
     Returns:
         An `AllPurposeFileExplorer` instance.
     """
+    pattern = pattern or "*"
     flt = _build_filter(filter_kwargs) if filter_kwargs else None
     if not isinstance(pattern, (str, list)):
         raise ValueError(

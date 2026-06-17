@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from niiflow.preproc.pipelines import build_dynamic_pipeline, discover_stage_classes
+from niiflow.preproc.pipelines import create_pipeline, discover_stage_classes
 from niiflow.preproc.pipelines.pipeline_stages import (
     CheckVoxelSpacing,
     Compose,
@@ -40,7 +40,7 @@ def registry_with_echo(
     registry = discover_stage_classes()
     registry = {**registry, "EchoStage": EchoStage}
     monkeypatch.setattr(
-        "niiflow.preproc.pipelines.stage_factory.discover_stage_classes",
+        "niiflow.preproc.pipelines.pipeline_factory.discover_stage_classes",
         lambda: registry,
     )
     return registry
@@ -60,7 +60,7 @@ def test_discover_stage_classes_excludes_compose_and_base() -> (
 def test_build_from_mapping_and_order(
     registry_with_echo: dict[str, PipelineStage],
 ) -> None:
-    pipeline = build_dynamic_pipeline(
+    pipeline = create_pipeline(
         {
             "order": ["qc", "echo"],
             "steps": {
@@ -93,7 +93,7 @@ def test_build_from_mapping_and_order(
 def test_build_from_mapping_without_order(
     registry_with_echo: dict[str, PipelineStage],
 ) -> None:
-    pipeline = build_dynamic_pipeline(
+    pipeline = create_pipeline(
         {
             "steps": {
                 "first": {
@@ -114,7 +114,7 @@ def test_build_from_mapping_without_order(
 
 
 def test_build_from_ordered_list(registry_with_echo: dict[str, PipelineStage]) -> None:
-    pipeline = build_dynamic_pipeline(
+    pipeline = create_pipeline(
         {
             "steps": [
                 {
@@ -139,7 +139,7 @@ def test_build_from_ordered_list(registry_with_echo: dict[str, PipelineStage]) -
 def test_build_runs_configured_stages_with_auto_ids(
     registry_with_echo: dict[str, PipelineStage],
 ) -> None:
-    pipeline = build_dynamic_pipeline(
+    pipeline = create_pipeline(
         {
             "steps": [
                 {
@@ -158,7 +158,7 @@ def test_build_runs_configured_stages_with_auto_ids(
 def test_build_runs_configured_stages_with_named_ids(
     registry_with_echo: dict[str, PipelineStage],
 ) -> None:
-    pipeline = build_dynamic_pipeline(
+    pipeline = create_pipeline(
         {
             "steps": {
                 "echo": {
@@ -178,7 +178,7 @@ def test_build_rejects_compose_name(
     registry_with_echo: dict[str, PipelineStage],
 ) -> None:
     with pytest.raises(ValueError, match="Compose"):
-        build_dynamic_pipeline(
+        create_pipeline(
             {
                 "order": ["nested"],
                 "steps": {
@@ -195,7 +195,7 @@ def test_build_rejects_instantiated_stage(
     registry_with_echo: dict[str, PipelineStage],
 ) -> None:
     with pytest.raises(TypeError, match="instantiated"):
-        build_dynamic_pipeline(
+        create_pipeline(
             {
                 "order": ["bad"],
                 "steps": {"bad": EchoStage(params={"message": "x"}, save_options={})},
@@ -207,7 +207,7 @@ def test_build_rejects_unknown_stage_name(
     registry_with_echo: dict[str, PipelineStage],
 ) -> None:
     with pytest.raises(ValueError, match="Unknown pipeline stage"):
-        build_dynamic_pipeline(
+        create_pipeline(
             {
                 "order": ["bad"],
                 "steps": {"bad": {"name": "NotARealStage", "params": {}}},
@@ -219,7 +219,7 @@ def test_build_rejects_failed_instantiation(
     registry_with_echo: dict[str, PipelineStage],
 ) -> None:
     with pytest.raises(TypeError, match="Failed to instantiate stage"):
-        build_dynamic_pipeline(
+        create_pipeline(
             {
                 "steps": [
                     {
@@ -235,7 +235,7 @@ def test_build_rejects_order_with_unknown_step_id(
     registry_with_echo: dict[str, PipelineStage],
 ) -> None:
     with pytest.raises(ValueError, match="unknown step id"):
-        build_dynamic_pipeline(
+        create_pipeline(
             {
                 "order": ["missing"],
                 "steps": {
@@ -253,7 +253,7 @@ def test_build_rejects_unused_step_in_mapping(
     registry_with_echo: dict[str, PipelineStage],
 ) -> None:
     with pytest.raises(ValueError, match="not listed in `order`"):
-        build_dynamic_pipeline(
+        create_pipeline(
             {
                 "order": ["echo"],
                 "steps": {
@@ -275,8 +275,8 @@ def test_build_rejects_unused_step_in_mapping(
 def test_build_rejects_unknown_keys_when_steps_is_list(
     registry_with_echo: dict[str, PipelineStage],
 ) -> None:
-    with pytest.raises(ValueError, match="Unknown pipeline config key"):
-        build_dynamic_pipeline(
+    with pytest.raises(ValueError, match="Unknown pipeline key"):
+        create_pipeline(
             {
                 "order": ["echo"],
                 "steps": [
@@ -289,8 +289,8 @@ def test_build_rejects_unknown_keys_when_steps_is_list(
             }
         )
 
-    with pytest.raises(ValueError, match="Unknown pipeline config key"):
-        build_dynamic_pipeline(
+    with pytest.raises(ValueError, match="Unknown pipeline key"):
+        create_pipeline(
             {
                 "unknown": True,
                 "steps": [
@@ -307,8 +307,8 @@ def test_build_rejects_unknown_keys_when_steps_is_list(
 def test_build_rejects_unknown_keys_when_steps_is_mapping(
     registry_with_echo: dict[str, PipelineStage],
 ) -> None:
-    with pytest.raises(ValueError, match="Unknown pipeline config key"):
-        build_dynamic_pipeline(
+    with pytest.raises(ValueError, match="Unknown pipeline key"):
+        create_pipeline(
             {
                 "unknown": True,
                 "steps": {

@@ -9,6 +9,7 @@ __all__ = [
     "ANTsRegistration",
     "ANTsResample",
     "ANTsResampleToTarget",
+    "ApplyMask",
     "CenterCrop",
     "CenterPad",
     "CheckDimensions",
@@ -44,4 +45,4 @@ from .registration import ANTsApplyTransforms, ANTsRegistration
 from .resampling import ANTsResample, ANTsResampleToTarget
 from .pipeline_stage import PipelineStage, RuntimeContext
 from .skull_stripping import ANTsBrainExtraction
-from .utility import Delete, Reorient, ToNumpy
+from .utility import ApplyMask, Delete, Reorient, ToNumpy

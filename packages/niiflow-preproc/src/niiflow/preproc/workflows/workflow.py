@@ -1,13 +1,14 @@
-"""Base and concrete classes for preprocessing workflows."""
+"""Base workflow abstractions and multi-worker execution."""
 
 from __future__ import annotations
 
 __all__ = [
-    "PreprocessFiles",
+    "PlanningWorkflow",
+    "ProcessingWorkflow",
 ]
 
 from abc import ABC, abstractmethod
-from typing import Callable, Any, Literal
+from typing import Any, Callable, Literal, Sequence
 from pathlib import Path
 import multiprocessing
 import time
@@ -20,131 +21,47 @@ from concurrent.futures import (
     wait,
 )
 import traceback
-from dataclasses import dataclass
 
-from niiflow.preproc.utils.file import resolve_path
-from niiflow.preproc.data import get_data_explorer
-from niiflow.preproc.workflows.logging_manager import LoggingManager, ParallelLogging
-from niiflow.preproc.workflows.logging_utils import (
+from niiflow.preproc.staging import StagedEntry
+from .logging_manager import LoggingManager, ParallelLogging
+from .logging_utils import (
     set_input_file_context,
     reset_input_file_context,
 )
-from niiflow.preproc.utils._types import InputData
+from .plan import RunPlan
 
 
 def _execute_one(
-    process_fn: Callable,
-    entry: Any,
-    pipeline_config: dict[str, Any] | None = None,
+    process_fn: Callable[[StagedEntry], None],
+    entry: StagedEntry,
 ) -> None:
     """Picklable single-entry executor with per-task input file context."""
-    token = set_input_file_context(str(entry))
+    token = set_input_file_context(entry.active.name)
     try:
-        process_fn(entry, pipeline_config)
+        process_fn(entry)
     finally:
         reset_input_file_context(token)
 
 
-@dataclass(frozen=True)
-class StagedEntry:
-    """A single input entry for processing.
+class ProcessingWorkflow(ABC):
+    """Base class for executing staged workflow entries.
 
-    Args:
-        label: A string label for the entry.
-        data: The data for the entry (file-dependent).
-    """
+    This class provides the common execution engine: logging, serial or
+    parallel worker execution, per-entry status reporting, and optional soft
+    per-entry timeouts.
 
-    label: str
-    data: Any
+    Subclasses implement :meth:`process_single`, which defines how one
+    :class:`~niiflow.preproc.staging.StagedEntry` is processed.
 
-    def __str__(self) -> str:
-        return self.label
-
-    def __repr__(self) -> str:
-        return f"StagedEntry(label={self.label!r}, data={self.data!r})"
-
-
-class PreprocessingWorkflow(ABC):
-    """
-    Base class for preprocessing workflows containing all machinery for file
-    discovery, multi-worker execution, and logging.
-
-    Subclasses must implement the `stage` and `process_single` methods.
-
-    Notes:
-        The `files` input can be a single file, a list of files, a string, a list of
-        strings, or a dictionary with a `root` key and a `patterns` key.
-
-        If a dictionary is provided, it will be used to instantiate a `nifti_finder`
-        explorer, requiring the keys:
-
-        - `root`: The root directory to search for files.
-        - `patterns`: The patterns to match for files.
-        - `filters` (optional): The filters to apply to the files.
-
-        The example below shows how to use a dictionary `files` input to instantiate an
-        explorer with a composed filter configuration:
-
-    Example:
-        ```python
-        >>> files = {
-        ...     "root": "/data/bids",
-        ...     "patterns": "*.nii*",
-        ...     "filters": {
-        ...         "name": "ComposeFilter",
-        ...         "kwargs": {
-        ...             "logic": "AND",
-        ...             "filters": [
-        ...                 {
-        ...                     "name": "IncludeFileRegex",
-        ...                     "kwargs": {"regex": r".*_T1w\\.nii(\\.gz)?$"},
-        ...                 },
-        ...                 {
-        ...                     "name": "ExcludeFileRegex",
-        ...                     "kwargs": {"regex": r".*_seg\\.nii(\\.gz)?$"},
-        ...                 },
-        ...             ],
-        ...         },
-        ...     },
-        ... }
-        ```
-
-    Args:
-        files (Path | list[Path] | str | list[str] | dict[str, Any]):
-            The input files to process. See the example above for more details.
-        staging_config (dict[str, Any] | None):
-            The configuration for staging; passed to the `stage` method.
-        pipeline_config (dict[str, Any] | None):
-            The configuration for the pipeline; passed to the `process_single` method.
-        num_workers (int | Literal["auto"]):
-            The number of workers to use. If `"auto"`, the number of workers is
-            set to the number of availableCPU cores.
-        logs_root (Path | str | None):
-            The root directory for logs. If not provided no logs will be written
-            other than to console.
-        main_logs (bool):
-            Whether to show main logs to console or to `logs_root/main.log` if
-            `logs_root` is provided.
-        status_logs (bool):
-            Whether to show status logs to console or to `logs_root/status.log` if
-            `logs_root` is provided.
-        worker_logs (bool):
-            Whether to show worker logs to console or to `logs_root/worker.log` if
-            `logs_root` is provided.
-        dev_mode (bool): Whether to enable debug mode. Activates debug-level
-            logging for worker processes.
-        timeout (float | None): Soft per-entry time limit in seconds. When set,
-            entries that exceed the limit are recorded as ``TIMEOUT`` in the
-            status log and processing continues with remaining entries. Worker
-            processes are not terminated.
+    The stable low-level execution API is :meth:`run_entries`. The public
+    :meth:`run` method represents the default user-facing action for this class
+    and may be specialized by higher-level workflow subclasses.
     """
 
     def __init__(
         self,
-        files: InputData,
-        staging_config: dict[str, Any] | None = None,
-        pipeline_config: dict[str, Any] | None = None,
-        num_workers: int | Literal["auto"] = "auto",
+        *,
+        num_workers: int | Literal["auto"] = 1,
         logs_root: Path | str | None = None,
         main_logs: bool = True,
         status_logs: bool = True,
@@ -161,59 +78,16 @@ class PreprocessingWorkflow(ABC):
         )
         self._main_logger = self._logging_manager.setup_main_logging()
         self._status_logger = self._logging_manager.setup_status_logging()
-        self.files = files
-        self.staging_config = staging_config
-        self.pipeline_config = pipeline_config
         self.num_workers = num_workers
         self.timeout = timeout
 
     @property
-    def files(self) -> list[Path]:
-        return self._files
-
-    @property
-    def root(self) -> Path | None:
-        return self._root
-
-    @property
-    def staging_config(self) -> dict[str, Any] | None:
-        return self._staging_config
-
-    @property
-    def pipeline_config(self) -> dict[str, Any] | None:
-        return self._pipeline_config
-
-    @property
-    def num_workers(self) -> int | Literal["auto"]:
+    def num_workers(self) -> int:
         return self._num_workers
 
     @property
     def timeout(self) -> float | None:
         return self._timeout
-
-    @files.setter
-    def files(self, files: InputData) -> None:
-        self._root, self._files = self._resolve_files(files)
-
-    @root.setter
-    def root(self, root: Path | None) -> None:
-        raise AttributeError("`root` is read-only; use `files` with a dictionary input")
-
-    @staging_config.setter
-    def staging_config(self, staging_config: dict[str, Any] | None) -> None:
-        if staging_config is not None and not isinstance(staging_config, dict):
-            raise ValueError(
-                f"`staging_config` must be a dictionary or None, got {type(staging_config).__name__}"
-            )
-        self._staging_config = staging_config
-
-    @pipeline_config.setter
-    def pipeline_config(self, pipeline_config: dict[str, Any] | None) -> None:
-        if pipeline_config is not None and not isinstance(pipeline_config, dict):
-            raise ValueError(
-                f"`pipeline_config` must be a dictionary or None, got {type(pipeline_config).__name__}"
-            )
-        self._pipeline_config = pipeline_config
 
     @num_workers.setter
     def num_workers(self, num_workers: int | Literal["auto"]) -> None:
@@ -246,56 +120,6 @@ class PreprocessingWorkflow(ABC):
             timeout = float(timeout)
         self._timeout = timeout
 
-    def _resolve_files(self, files: InputData) -> tuple[Path | None, list[Path]]:
-        if isinstance(files, (Path, str)):
-            f = resolve_path(files)
-            if not f.exists():
-                raise FileNotFoundError(f"File {f} does not exist")
-            return None, [f]
-
-        if isinstance(files, list):
-            fs = []
-            for f in files:
-                f = resolve_path(f)
-                if not f.exists():
-                    raise FileNotFoundError(f"File {f} does not exist")
-                fs.append(f)
-            return None, fs
-
-        if isinstance(files, dict):
-            self.log("Instantiating data explorer...")
-
-            if "root" not in files:
-                raise ValueError("`root` key is required in `data` dictionary")
-            if not isinstance(files["root"], (Path, str)):
-                raise ValueError(
-                    f"`root` must be a Path or str object, got {type(files['root']).__name__}"
-                )
-
-            if "pattern" not in files:
-                raise ValueError("`pattern` key is required in `data` dictionary")
-
-            try:
-                explorer = get_data_explorer(
-                    pattern=files["pattern"],
-                    filter_kwargs=files.get("filters", None),
-                )
-            except Exception as e:
-                raise RuntimeError(
-                    "Failed to bind arguments to data explorer; see "
-                    "``nifti_finder``'s documentation of ``AllPurposeFileExplorer`` for "
-                    "more details."
-                ) from e
-
-            self.log("Data explorer instantiated successfully.")
-            self.log("Finding files...")
-            root = resolve_path(files["root"])
-            files = explorer.list(root, sort=True, unique=True)
-            self.log(f"Found {len(files)} unique files.")
-            return root, files
-
-        raise ValueError(f"Invalid `files` input: {type(files).__name__}")
-
     def log(
         self,
         message: str,
@@ -303,45 +127,140 @@ class PreprocessingWorkflow(ABC):
     ) -> None:
         getattr(self._main_logger, level)(message)
 
-    def status(
-        self,
-        message: str,
-    ) -> None:
+    def status(self, message: str) -> None:
         self._status_logger.info(message)
 
+    @staticmethod
+    @abstractmethod
+    def process_single(entry: StagedEntry) -> None:
+        """Process one staged entry.
+
+        Must be picklable for process pools.
+        """
+        ...
+
+    def run_entries(self, entries: Sequence[StagedEntry]) -> None:
+        """Execute a sequence of staged entries.
+
+        This is the canonical low-level execution method. Each entry is processed
+        independently by :meth:`process_single`, either serially or using the
+        configured worker pool.
+
+        Args:
+            entries: Staged entries to process. Each entry should already contain
+                all parameters required by :meth:`process_single`.
+
+        Raises:
+            TypeError: If any item in ``entries`` is not a
+                :class:`~niiflow.preproc.staging.StagedEntry`.
+
+        Notes:
+            Entries with :attr:`~niiflow.preproc.staging.StagedEntry.errors` are
+            reported as ``STAGING_FAILURE`` in the status log and are not passed to
+            :meth:`process_single`.
+
+            A configured timeout is a soft per-entry timeout. Timed-out entries are
+            reported in the status log, but running worker tasks may continue until
+            the underlying executor finishes or terminates.
+        """
+        entry_list = list(entries)
+        if not entry_list:
+            self.log("No entries to process")
+            return
+        if not all(isinstance(entry, StagedEntry) for entry in entry_list):
+            raise TypeError("`entries` must contain only `StagedEntry` objects")
+
+        runnable, skipped = self._partition_entries(entry_list)
+        if skipped:
+            self.log(
+                f"Skipping {len(skipped)} entr{'y' if len(skipped) == 1 else 'ies'} "
+                "with staging errors"
+            )
+            for entry in skipped:
+                self._report_staging_failure(entry)
+
+        self.log(
+            f"Starting workflow with {len(runnable)} runnable "
+            f"entr{'y' if len(runnable) == 1 else 'ies'} "
+            f"({len(entry_list)} total), {self._num_workers} workers"
+        )
+
+        if not runnable:
+            self.log("No runnable entries to process")
+            return
+
+        with self._logging_manager.setup_parallel_logging() as parallel:
+            if self._num_workers <= 1:
+                self._run_serial(runnable)
+            else:
+                self._run_parallel(runnable, parallel)
+
+        self.log("Workflow complete")
+
+    def run(self, entries: Sequence[StagedEntry]) -> None:
+        """Run the default workflow action.
+
+        For execution-only workflows, this is equivalent to
+        :meth:`run_entries`.
+
+        Args:
+            entries: Staged entries to execute.
+        """
+        self.run_entries(entries)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Call :meth:`run`.
+
+        This provides a compact shorthand for the class-specific default run interface.
+        """
+        return self.run(*args, **kwargs)
+
+    @staticmethod
+    def _partition_entries(
+        entries: list[StagedEntry],
+    ) -> tuple[list[StagedEntry], list[StagedEntry]]:
+        runnable: list[StagedEntry] = []
+        skipped: list[StagedEntry] = []
+        for entry in entries:
+            if entry.errors:
+                skipped.append(entry)
+            else:
+                runnable.append(entry)
+        return runnable, skipped
+
+    def _report_staging_failure(self, entry: StagedEntry) -> None:
+        self.status(
+            f"{entry.active} | STAGING_FAILURE | "
+            f"{' | '.join(error.message for error in entry.errors)}"
+        )
+
     def _report_future_result(self, fut: Future[None], entry: StagedEntry) -> None:
-        """Map a completed future to a status-log line."""
         try:
             if self._timeout is not None:
                 fut.result(timeout=self._timeout)
             else:
                 fut.result()
-            self.status(f"{entry} | SUCCESS")
+            self.status(f"{entry.active} | SUCCESS")
         except TimeoutError:
-            self.status(f"{entry} | TIMEOUT | exceeded {self._timeout}s")
+            self.status(f"{entry.active} | TIMEOUT | exceeded {self._timeout}s")
         except Exception:
             tb = traceback.format_exc().strip().replace("\n", "\n  ")
-            self.status(f"{entry} | FAILURE | {tb}")
+            self.status(f"{entry.active} | FAILURE | {tb}")
 
     def _run_serial(self, entries: list[StagedEntry]) -> None:
         if self._timeout is None:
             for entry in entries:
                 try:
-                    _execute_one(self.process_single, entry, self._pipeline_config)
-                    self.status(f"{entry} | SUCCESS")
+                    _execute_one(self.process_single, entry)
+                    self.status(f"{entry.active} | SUCCESS")
                 except Exception:
                     tb = traceback.format_exc().strip().replace("\n", "\n  ")
-                    self.status(f"{entry} | FAILURE | {tb}")
+                    self.status(f"{entry.active} | FAILURE | {tb}")
             return
 
         with ThreadPoolExecutor(max_workers=1) as executor:
             for entry in entries:
-                fut = executor.submit(
-                    _execute_one,
-                    self.process_single,
-                    entry,
-                    self._pipeline_config,
-                )
+                fut = executor.submit(_execute_one, self.process_single, entry)
                 self._report_future_result(fut, entry)
 
     def _run_parallel(
@@ -352,12 +271,7 @@ class PreprocessingWorkflow(ABC):
             initializer=parallel.worker_init_fn,
         ) as pool:
             futures = {
-                pool.submit(
-                    _execute_one,
-                    self.process_single,
-                    entry,
-                    self._pipeline_config,
-                ): entry
+                pool.submit(_execute_one, self.process_single, entry): entry
                 for entry in entries
             }
             if self._timeout is None:
@@ -365,10 +279,6 @@ class PreprocessingWorkflow(ABC):
                     self._report_future_result(fut, futures[fut])
                 return
 
-            # as_completed only yields finished futures; poll so hung entries
-            # can be marked TIMEOUT while others continue (soft timeout).
-            # Looping naively over futures would address this but without
-            # completion-order handling and responsive status updates.
             submit_times = {fut: time.monotonic() for fut in futures}
             handled: set[Future[None]] = set()
             poll_interval = min(0.5, self._timeout / 10)
@@ -392,109 +302,55 @@ class PreprocessingWorkflow(ABC):
                 for fut in not_done:
                     if now - submit_times[fut] > self._timeout:
                         entry = remaining[fut]
-                        # Parent stops waiting; the worker process is not terminated.
-                        self.status(f"{entry} | TIMEOUT | exceeded {self._timeout}s")
+                        self.status(
+                            f"{entry.active} | TIMEOUT | exceeded {self._timeout}s"
+                        )
                         handled.add(fut)
 
-    def run(self) -> None:
-        self.log(
-            f"Starting workflow with {len(self.files)} files, {self._num_workers} workers"
-        )
 
-        entries = self.stage(self.files, self._staging_config)
-        if not isinstance(entries, list) or not all(
-            isinstance(e, StagedEntry) for e in entries
-        ):
-            raise ValueError("`stage` must return a list of `StagedEntry` objects")
-        if len(entries) == 0:
-            self.log("No entries to process")
-            return
+class PlanningWorkflow(ProcessingWorkflow):
+    """Base for workflows that support planning before execution.
 
-        with (
-            self._logging_manager.setup_parallel_logging() as parallel
-        ):  # listener starts, stops on exit
-            if self._num_workers <= 1:
-                self._run_serial(entries)
-            else:
-                self._run_parallel(entries, parallel)
+    Planning workflows discover or assemble inputs, resolve per-entry parameters, and
+    produce a :class:`~niiflow.preproc.workflows.plan.RunPlan`.
 
-        self.log("Workflow complete")
+    Subclasses implement :meth:`plan` with workflow-specific inputs. Use
+    :meth:`run_plan` to execute a saved or freshly built plan. Use :meth:`run_entries`
+    only when executing already staged entries directly.
 
-    __call__ = run
-
-    @abstractmethod
-    def stage(
-        self, files: list[Path], staging_config: dict[str, Any] | None = None
-    ) -> list[StagedEntry]:
-        """Stage the input files into a list of input entries for processing.
-
-        Example cases include aggregating multimodal data of a single subject, or
-        no-op (single-file processing).
-
-        Args:
-            files: The list of files to stage.
-            staging_config: The configuration for staging.
-
-        Returns:
-            A list of `StagedEntry` objects.
-        """
-        ...
-
-    @staticmethod
-    @abstractmethod
-    def process_single(
-        entry: StagedEntry, pipeline_config: dict[str, Any] | None = None
-    ) -> None:
-        """Process a single input entry.
-
-        The method is static to allow for pickling in multi-worker mode.
-
-        Args:
-            entry: The input `StagedEntry` to process.
-            pipeline_config: The configuration for the pipeline (shared across all entries).
-        """
-        ...
-
-
-class PreprocessFiles(PreprocessingWorkflow):
-    """Preprocessing workflow that runs a pipeline for each file.
-
-    Args:
-        pipeline: The preprocessing pipeline to run.
+    For planning workflows, :meth:`run` is the default user-facing execution method and
+    is equivalent to :meth:`run_plan`.
     """
 
-    def __init__(
-        self,
-        files: InputData,
-        pipeline_config: dict[str, Any] | None = None,
-        num_workers: int | Literal["auto"] = "auto",
-        logs_root: Path | str | None = None,
-        main_logs: bool = True,
-        status_logs: bool = True,
-        worker_logs: bool = True,
-        dev_mode: bool = False,
-        timeout: float | None = None,
-    ) -> None:
-        super().__init__(
-            files,
-            staging_config=None,
-            pipeline_config=pipeline_config,
-            num_workers=num_workers,
-            logs_root=logs_root,
-            main_logs=main_logs,
-            status_logs=status_logs,
-            worker_logs=worker_logs,
-            dev_mode=dev_mode,
-            timeout=timeout,
-        )
+    @abstractmethod
+    def plan(self, source: Any) -> RunPlan:
+        """Build a run plan from workflow-specific inputs."""
+        ...
 
-    def stage(
-        self, files: list[Path], staging_config: dict[str, Any] | None = None
-    ) -> list[StagedEntry]:
-        return [StagedEntry(label=str(f), data=f) for f in files]
+    def run_plan(self, plan: RunPlan) -> None:
+        """Execute a prepared run plan.
 
-    @staticmethod
-    def process_single(
-        entry: StagedEntry, pipeline_config: dict[str, Any] | None = None
-    ) -> None:
-        print(entry)
+        Args:
+            plan: Run plan whose entries should be executed.
+
+        Raises:
+            TypeError: If ``plan`` is not a
+                :class:`~niiflow.preproc.workflows.plan.RunPlan`.
+
+        Notes:
+            This method does not rebuild, modify, or restage the plan. It executes
+            the entries exactly as stored in ``plan``.
+        """
+        if not isinstance(plan, RunPlan):
+            raise TypeError(f"`plan` must be a RunPlan, got {type(plan).__name__}")
+        self.run_entries(plan.entries)
+
+    def run(self, plan: RunPlan) -> None:
+        """Run the default workflow action.
+
+        For planning workflows, this is equivalent to :meth:`run_plan`.
+
+        Args:
+            plan: Run plan to execute.
+        """
+        self.run_plan(plan)

@@ -24,7 +24,11 @@ from niiflow.preproc.pipelines.pipeline_stages import (
     ANTsBiasFieldCorrection,
     ANTsBrainExtraction,
     ANTsDenoise,
+    ANTsPreprocessBrainImage,
     ANTsRegistration,
+    ANTsResample,
+    ANTsResampleToTarget,
+    ApplyMask,
     CenterCrop,
     CenterPad,
     CheckDimensions,
@@ -59,13 +63,17 @@ SHIPPED_STAGE_CLASSES: tuple[StageFactory, ...] = (
     CenterCrop,
     CenterPad,
     ANTsRegistration,
+    ANTsResample,
+    ANTsResampleToTarget,
     ANTsBrainExtraction,
     ANTsApplyTransforms,
+    ANTsPreprocessBrainImage,
     ClampIntensities,
     ZTransformNorm,
     MinmaxNorm,
     CheckVoxelSpacing,
     CheckDimensions,
+    ApplyMask,
     Delete,
     Reorient,
     ToNumpy,
@@ -80,6 +88,9 @@ PRIMARY_SAVE_KEY: dict[StageFactory, str] = {
     CenterCrop: "out_image",
     CenterPad: "out_image",
     ANTsRegistration: "fwdtransforms",
+    ANTsResample: "out_image",
+    ANTsResampleToTarget: "out_image",
+    ANTsPreprocessBrainImage: "out_image",
     ANTsBrainExtraction: "out_image",
     ANTsApplyTransforms: "out_image",
     ClampIntensities: "out_image",
@@ -87,6 +98,7 @@ PRIMARY_SAVE_KEY: dict[StageFactory, str] = {
     MinmaxNorm: "out_image",
     CheckVoxelSpacing: "passed",
     CheckDimensions: "passed",
+    ApplyMask: "out_image",
     Delete: "deleted",
     Reorient: "out_image",
     ToNumpy: "array",
@@ -255,11 +267,47 @@ def _reorient_stage_config(
     return {"image": str(image), "orientation": "RAS"}, {"out_image": None}
 
 
+def _apply_mask_stage_config(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    image = _touch(tmp_path / "image.nii.gz")
+    mask = _touch(tmp_path / "mask.nii.gz")
+    return {"image": str(image), "mask": str(mask)}, {"out_image": None}
+
+
 def _to_numpy_stage_config(
     tmp_path: Path,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     image = _touch(tmp_path / "image.nii.gz")
     return {"image": str(image), "dtype": "float32"}, {"array": None}
+
+
+def _ants_resample_stage_config(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    image = _touch(tmp_path / "image.nii.gz")
+    return (
+        {"image": str(image), "resample_params": [1.0, 1.0, 1.0]},
+        {"out_image": None},
+    )
+
+
+def _ants_resample_to_target_stage_config(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    image = _touch(tmp_path / "image.nii.gz")
+    target = _touch(tmp_path / "target.nii.gz")
+    return (
+        {"image": str(image), "target": str(target)},
+        {"out_image": None},
+    )
+
+
+def _ants_preprocess_brain_image_stage_config(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    image = _touch(tmp_path / "image.nii.gz")
+    return {"image": str(image)}, {"out_image": None}
 
 
 STAGE_CONFIG_BUILDERS: dict[
@@ -274,6 +322,9 @@ STAGE_CONFIG_BUILDERS: dict[
     CenterCrop: _center_crop_stage_config,
     CenterPad: _center_pad_stage_config,
     ANTsRegistration: _registration_stage_config,
+    ANTsResample: _ants_resample_stage_config,
+    ANTsResampleToTarget: _ants_resample_to_target_stage_config,
+    ANTsPreprocessBrainImage: _ants_preprocess_brain_image_stage_config,
     ANTsApplyTransforms: _apply_transforms_stage_config,
     ClampIntensities: _intensity_norm_stage_config,
     ZTransformNorm: _intensity_norm_stage_config,
@@ -281,6 +332,7 @@ STAGE_CONFIG_BUILDERS: dict[
     CheckVoxelSpacing: _check_voxel_spacing_stage_config,
     CheckDimensions: _check_dimensions_stage_config,
     Delete: _delete_stage_config,
+    ApplyMask: _apply_mask_stage_config,
     Reorient: _reorient_stage_config,
     ToNumpy: _to_numpy_stage_config,
 }
@@ -297,6 +349,13 @@ STUB_FORWARD_OUTPUTS: dict[StageFactory, dict[str, Any]] = {
     ANTsRegistration: {
         "fwdtransforms": ["stub_fwd.mat"],
         "invtransforms": ["stub_inv.mat"],
+    },
+    ANTsResample: {"out_image": object()},
+    ANTsResampleToTarget: {"out_image": object()},
+    ANTsPreprocessBrainImage: {
+        "out_image": object(),
+        "brain_mask": object(),
+        "bias_field": object(),
     },
     ANTsApplyTransforms: {"out_image": object()},
     ClampIntensities: {"out_image": object()},
@@ -321,6 +380,7 @@ STUB_FORWARD_OUTPUTS: dict[StageFactory, dict[str, Any]] = {
         },
     },
     Delete: {"deleted": []},
+    ApplyMask: {"out_image": object()},
     Reorient: {"out_image": object()},
     ToNumpy: {"array": object(), "metadata": {}},
 }
@@ -592,9 +652,7 @@ class TestDummyPipelineStageRun:  # same; test only shipped
         assert "skipped" not in out.metadata
         assert out.steps_completed == []
 
-    def test_run_skips_when_enable_resolved_from_ctx(
-        self, tmp_path: Path
-    ) -> None:  # TODO: not needed; suffices to check (i) disables, (ii) reads ctx
+    def test_run_skips_when_enable_resolved_from_ctx(self, tmp_path: Path) -> None:
         params, save_options = build_stage_config(
             DummyPipelineStage,
             tmp_path,
@@ -608,9 +666,7 @@ class TestDummyPipelineStageRun:  # same; test only shipped
         assert "conditional" not in out.artifacts
         assert out.steps_completed == []
 
-    def test_run_proceeds_when_enable_resolved_from_ctx(
-        self, tmp_path: Path
-    ) -> None:  # TODO: same as above
+    def test_run_proceeds_when_enable_resolved_from_ctx(self, tmp_path: Path) -> None:
         params, save_options = build_stage_config(
             DummyPipelineStage,
             tmp_path,
@@ -632,6 +688,31 @@ class TestDummyPipelineStageRun:  # same; test only shipped
         )
         with pytest.raises(TypeError, match="enable"):
             DummyPipelineStage(params=params, save_options=save_options).run(step_ctx())
+
+    def test_run_skips_without_loading_other_params_when_enable_false(
+        self, tmp_path: Path
+    ) -> None:
+        loaded: list[str] = []
+
+        class TrackingStage(DummyPipelineStage):
+            def load_param(self, key: str, value: Any) -> Any:
+                loaded.append(key)
+                return super().load_param(key, value)
+
+        params = {
+            "enable": "ctx.artifacts.qc.passed",
+            "input_nii": "ctx.artifacts.missing.out_image",
+            "scale_factor": 2.0,
+        }
+        save_options = {"output_nii": str(tmp_path / "out.nii.gz")}
+        ctx = RuntimeContext(
+            step_id="gated",
+            artifacts={"qc": {"passed": False}},
+        )
+        out = TrackingStage(params=params, save_options=save_options).run(ctx)
+        assert loaded == []
+        assert "gated" not in out.artifacts
+        assert out.steps_completed == []
 
     def test_call_dunder_delegates_to_run(self, tmp_path: Path) -> None:
         stage = make_stage(DummyPipelineStage, tmp_path)

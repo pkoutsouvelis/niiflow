@@ -96,38 +96,48 @@ def write_npy(array: np.ndarray, path: Path | str) -> Path:
     return resolved
 
 
-def read_json(path: Path | str) -> dict[str, Any]:
-    """Load a JSON file and return its root mapping.
+def json_safe(value: Any) -> Any:
+    """Convert a value to a JSON-safe representation.
+
+    Mappings, sequences (including tuples), and scalars are supported. Paths are written
+    as strings.
+    """
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    return value
+
+
+def read_json(path: Path | str) -> Any:
+    """Load a JSON file and return its parsed root value.
+
+    The root may be a mapping, list, or scalar depending on the file contents.
 
     Raises:
         FileNotFoundError: If ``path`` does not exist.
-        TypeError: If the document root is not a mapping.
     """
     resolved = resolve_path(path)
     if not resolved.is_file():
         raise FileNotFoundError(resolved)
     text = resolved.read_text(encoding="utf-8")
-    data = json.loads(text)
-    if data is None:
-        return {}
-    if not isinstance(data, dict):
-        raise TypeError(
-            f"JSON root at {resolved} must be a mapping, got {type(data).__name__}"
-        )
-    return data
+    return json.loads(text)
 
 
-def write_json(data: dict[str, Any], path: Path | str) -> Path:
-    """Write ``data`` to a JSON file.
+def write_json(data: Any, path: Path | str) -> Path:
+    """Write a JSON-serializable value to a file.
+
+    Mappings, sequences (including tuples), and scalars are supported. Paths are written
+    as strings.
 
     Parent directories are created when missing. Returns the resolved output path.
     """
-    if not isinstance(data, dict):
-        raise TypeError(f"`data` must be a dict, got {type(data).__name__}")
     resolved = resolve_path(path)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(
-        json.dumps(data, indent=2) + "\n",
+        json.dumps(json_safe(data), indent=2) + "\n",
         encoding="utf-8",
     )
     return resolved
@@ -159,7 +169,7 @@ def write_txt(text: str, path: Path | str) -> Path:
     return resolved
 
 
-def load_yaml(path: Path | str) -> dict[str, Any]:
+def read_yaml(path: Path | str) -> dict[str, Any]:
     """Load a YAML file and return its root mapping.
 
     Raises:

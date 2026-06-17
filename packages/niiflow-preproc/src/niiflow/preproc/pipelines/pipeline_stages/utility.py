@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 __all__ = [
+    "ApplyMask",
     "Delete",
     "Reorient",
     "ToNumpy",
@@ -15,6 +16,7 @@ from typing import Any
 from ants.core import ANTsImage
 
 from niiflow.preproc.functional.image.reorientation import ants_reorient
+from niiflow.preproc.functional.image.skull_stripping import ants_apply_mask
 
 from niiflow.preproc.functional.image.utils import ants_to_numpy_with_metadata
 from niiflow.preproc.pipelines.pipeline_stages.pipeline_stage import PipelineStage
@@ -96,6 +98,54 @@ class Delete(PipelineStage):
                     f"`deleted` must be a list of paths, got {type(value).__name__}"
                 )
             return write_json({"paths": [str(path) for path in value]}, output_path)
+        raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
+
+
+class ApplyMask(PipelineStage):
+    """Apply a mask to an image.
+
+    Wraps
+    :func:`~niiflow.preproc.functional.image.skull_stripping.ants_apply_mask`.
+
+    **Parameters** (``params``):
+
+    * ``image`` — :class:`ants.core.ANTsImage` or path to load.
+    * ``mask`` — mask or label image (:class:`ants.core.ANTsImage` or path).
+    * Additional kwargs are forwarded to ``ants_apply_mask`` (e.g. ``level``,
+      ``binarize``).
+
+    **Outputs** (from :meth:`forward`):
+
+    * ``out_image`` — masked image.
+
+    **Persistence** (``save_options``):
+
+    * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
+    """
+
+    REQUIRED_PARAMS = frozenset({"image", "mask"})
+
+    def load_param(self, key: str, value: Any) -> Any:
+        if key in {"image", "mask"}:
+            if isinstance(value, ANTsImage):
+                return value
+            try:
+                return ants_image_read(value, reorient=True)
+            except Exception as e:
+                raise ValueError(f"Failed to read {key} from {value}") from e
+        return value
+
+    def forward(self, **params: Any) -> dict[str, Any]:
+        return {"out_image": ants_apply_mask(**params)}
+
+    def save_output(self, key: str, value: Any, output_path: Path) -> Path:
+        if key == "out_image":
+            if get_ext(output_path) not in (".nii.gz", ".nii"):
+                raise ValueError(
+                    f"Output path for {key!r} must end with .nii.gz or .nii, "
+                    f"got {output_path!s}"
+                )
+            return ants_image_write(value, output_path)
         raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
 
 

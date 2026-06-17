@@ -166,14 +166,16 @@ class PipelineStage(ABC):
     ``"ctx.<dotted.path>"`` (e.g. ``ctx.run_id``, ``ctx.metadata.subject``,
     ``ctx.artifacts.<step_id>.<output>``).
     References are resolved in
-    :meth:`_load_params` before :meth:`load_param` is invoked for every key.
+    :meth:`_load_params` before :meth:`load_param` is invoked for every key
+    (except ``enable``, which is evaluated earlier via :meth:`_check_enabled`).
 
-    An optional ``enable`` entry in ``params`` (default ``True``) is consumed by
-    :meth:`run` after parameters are loaded. When ``enable`` is ``False``, the
-    stage returns without calling :meth:`forward`, writing outputs, or updating
-    ``ctx.artifacts``, ``ctx.metadata``, or ``ctx.steps_completed``. This pairs
-    naturally with boolean QC artifacts (e.g.
-    ``"enable": "ctx.artifacts.<qc_step>.passed"``).
+    An optional ``enable`` entry in ``params`` (default ``True``) is resolved and
+    evaluated by :meth:`_check_enabled` **before** other parameters are loaded.
+    When ``enable`` is ``False``, the stage returns without calling
+    :meth:`forward`, writing outputs, or updating ``ctx.artifacts``,
+    ``ctx.metadata``, or ``ctx.steps_completed``. Other ``params`` are not
+    materialised when the stage is skipped. This pairs naturally with boolean QC
+    artifacts (e.g. ``"enable": "ctx.artifacts.<qc_step>.passed"``).
 
     The machinery in :meth:`run` -- not subclasses -- owns publishing outputs to
     ``ctx.artifacts[step_id]`` and appending to ``ctx.steps_completed``.
@@ -282,8 +284,8 @@ class PipelineStage(ABC):
     def load_param(self, key: str, value: Any) -> Any:
         """Lazily materialise the parameter ``key`` from its configured ``value``.
 
-        Called from :meth:`run` (via :meth:`_load_params`) for **every** entry in
-        ``params``, after any ``ctx.``-style reference has been resolved.
+        Called from :meth:`run` (via :meth:`_load_params`) for each entry in ``params``
+        when the stage is enabled, after any ``ctx.``-style reference has been resolved.
         Implementations should pass through values that are already in final form
         (scalars, in-memory images resolved from ``ctx.artifacts``, pre-loaded arrays)
         and materialise others (paths, remote URIs) as needed for :meth:`forward`.
@@ -330,6 +332,20 @@ class PipelineStage(ABC):
         context directly.
         """
         return {}
+
+    def _check_enabled(self, params: dict[str, Any], ctx: RuntimeContext) -> bool:
+        """Resolve and evaluate ``enable`` without loading other parameters.
+
+        ``params`` is not mutated. Returns ``True`` when the stage should run.
+        """
+        enable = params.get("enable", True)
+        if isinstance(enable, str) and enable.startswith(_CTX_PREFIX):
+            enable = _resolve_ctx_path(ctx, enable)
+        if not isinstance(enable, bool):
+            enable = self.load_param("enable", enable)
+        if not isinstance(enable, bool):
+            raise TypeError(f"`enable` must be a boolean, got {type(enable).__name__}")
+        return enable
 
     def _load_params(
         self, params: dict[str, Any], ctx: RuntimeContext
@@ -481,17 +497,17 @@ class PipelineStage(ABC):
         self.log(f"[Stage {name} | {step_id}] Running...")
         start = time.perf_counter()
 
-        params = self._load_params(deepcopy(self.params), ctx)
-        enable = params.pop("enable", True)
-        if not isinstance(enable, bool):
-            raise TypeError(f"`enable` must be a boolean, got {type(enable).__name__}")
-        if not enable:
+        params = deepcopy(self.params)
+        if not self._check_enabled(params, ctx):
             elapsed = time.perf_counter() - start
             self.log(
                 f"[Stage {name} | {step_id}] Skipped (enable=False) "
                 f"in {elapsed:.2f}s"
             )
             return ctx
+
+        params.pop("enable", None)
+        params = self._load_params(params, ctx)
 
         outputs = self.forward(**params)
 

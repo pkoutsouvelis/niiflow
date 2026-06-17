@@ -1,0 +1,88 @@
+# BIDS explorer: healthy-control T1w images that also have a FLAIR companion.
+# QC gates skull-stripping; FileStager resolves derivative output paths.
+#
+# Usage:
+#   niiflow-preproc plan configs/bids_controls_t1w_flair.yaml -o /data/plans/controls.duckdb
+#   niiflow-preproc execute configs/bids_controls_t1w_flair.yaml
+
+workflow:
+  name: DynamicPreprocessingWorkflow
+  kwargs:
+    num_workers: auto
+    logs_root: /data/logs
+    explorer_params:
+      pattern: "**/anat/*T1w.nii*"
+      filters:
+        name: ComposeFilter
+        kwargs:
+          logic: AND
+          filters:
+            - name: IncludeFromTable
+              kwargs:
+                table_path: /root/of/BIDS/dataset/participants.tsv
+                id_column: dataset_subject_session
+                criteria_column: group
+                criteria_value: Control
+                id_pattern: "{id}"
+            - name: IncludeIfFileExists
+              kwargs:
+                filename_pattern: "*FLAIR.nii*"
+    staging_params:
+      stager_name: FileStager
+      params:
+        pointers:
+          steps.qc.params.image: input
+          steps.qc.save_options.report: output
+          steps.strip.params.image: input
+          steps.strip.save_options.out_image: output
+          steps.strip.save_options.brain_mask: output
+    pipeline_params:
+      verbose: true
+      steps:
+        qc:
+          name: CheckVoxelSpacing
+          params:
+            image: "{active.path}"
+            expected: [1.0, 1.0, 1.0]
+            op: "<="
+            id: "ctx.run_id"
+            log: true
+          save_options:
+            report:
+              root:
+                mode: parent_match
+                value: anat
+                mirror:
+                  source: rawdata
+                  target: derivatives/niiflow/qc
+              name: "{active.stem}_qc_spacing.json"
+        strip:
+          name: ANTsBrainExtraction
+          params:
+            image: "{active.path}"
+            modality: t1
+            enable: "ctx.artifacts.qc.passed"
+          save_options:
+            out_image:
+              root:
+                mode: parent_match
+                value: anat
+                mirror:
+                  source: rawdata
+                  target: derivatives/niiflow
+              name: "{active.stem|strip:_T1w}_desc-brain_T1w.nii.gz"
+            brain_mask:
+              root:
+                mode: parent_match
+                value: anat
+                mirror:
+                  source: rawdata
+                  target: derivatives/niiflow
+              name: "{active.stem|strip:_T1w}_desc-brain_mask.nii.gz"
+      order: [qc, strip]
+
+run_inputs:
+  - /root/of/BIDS/dataset
+
+artifacts:
+  plan_path: /data/plans/controls.duckdb
