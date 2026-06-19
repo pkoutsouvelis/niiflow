@@ -426,6 +426,108 @@ class TestDynamicWorkflowRun:
         assert f"{slow.resolve()} | TIMEOUT" in status
         assert "fast.nii.gz.done" in {path.name for path in sentinels.iterdir()}
 
+    @pytest.mark.parametrize("num_workers", [1, 2])
+    def test_timeout_measures_worker_processing_not_queue_wait(
+        self,
+        tmp_path: Path,
+        logs_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        num_workers: int,
+    ) -> None:
+        """Fast entries must not TIMEOUT while waiting for a worker."""
+        first = tmp_path / "first.nii.gz"
+        second = tmp_path / "second.nii.gz"
+        first.write_bytes(b"")
+        second.write_bytes(b"")
+        sentinels = tmp_path / "sentinels"
+        wf = _workflow(
+            pipeline_params={
+                "steps": [],
+                "out_dir": str(sentinels),
+                "slow_actives": (str(first),),
+                "sleep_seconds": 1.5,
+            },
+            num_workers=num_workers,
+            logs_root=logs_dir,
+            timeout=0.5,
+        )
+        monkeypatch.setattr(wf, "process_single", _proc_sleep_if_active)
+
+        wf.run([first, second])
+
+        status = (logs_dir / "status.log").read_text(encoding="utf-8")
+        assert f"{first.resolve()} | TIMEOUT" in status
+        assert f"{second.resolve()} | SUCCESS" in status
+        assert {path.name for path in sentinels.iterdir()} == {
+            "first.nii.gz.done",
+            "second.nii.gz.done",
+        }
+
+    def test_timeout_success_when_processing_finishes_within_limit(
+        self,
+        tmp_path: Path,
+        logs_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Completion after the limit must be TIMEOUT; within the limit, SUCCESS."""
+        entry = tmp_path / "entry.nii.gz"
+        entry.write_bytes(b"")
+        sentinels = tmp_path / "sentinels"
+
+        def _proc_sleep(entry: StagedEntry) -> None:
+            time.sleep(float(entry.params["sleep_seconds"]))
+            _proc_touch_sentinel(entry)
+
+        wf = _workflow(
+            pipeline_params={
+                "steps": [],
+                "out_dir": str(sentinels),
+                "sleep_seconds": 0.2,
+            },
+            num_workers=1,
+            logs_root=logs_dir,
+            timeout=0.5,
+        )
+        monkeypatch.setattr(wf, "process_single", _proc_sleep)
+
+        wf.run(entry)
+
+        status = (logs_dir / "status.log").read_text(encoding="utf-8")
+        assert f"{entry.resolve()} | SUCCESS" in status
+        assert "TIMEOUT" not in status
+
+    def test_timeout_when_processing_exceeds_limit(
+        self,
+        tmp_path: Path,
+        logs_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        entry = tmp_path / "entry.nii.gz"
+        entry.write_bytes(b"")
+        sentinels = tmp_path / "sentinels"
+
+        def _proc_sleep(entry: StagedEntry) -> None:
+            time.sleep(float(entry.params["sleep_seconds"]))
+            _proc_touch_sentinel(entry)
+
+        wf = _workflow(
+            pipeline_params={
+                "steps": [],
+                "out_dir": str(sentinels),
+                "sleep_seconds": 0.8,
+            },
+            num_workers=1,
+            logs_root=logs_dir,
+            timeout=0.5,
+        )
+        monkeypatch.setattr(wf, "process_single", _proc_sleep)
+
+        wf.run(entry)
+
+        status = (logs_dir / "status.log").read_text(encoding="utf-8")
+        assert f"{entry.resolve()} | TIMEOUT" in status
+        assert "SUCCESS" not in status
+
     def test_run_plan_skips_entries_with_staging_errors(
         self,
         tmp_path: Path,

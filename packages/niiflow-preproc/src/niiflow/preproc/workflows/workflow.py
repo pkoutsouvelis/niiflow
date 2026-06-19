@@ -21,6 +21,7 @@ from concurrent.futures import (
     wait,
 )
 import traceback
+from multiprocessing.managers import DictProxy
 
 from niiflow.preproc.staging import StagedEntry
 from .logging_manager import LoggingManager, ParallelLogging
@@ -30,17 +31,29 @@ from .logging_utils import (
 )
 from .plan import RunPlan
 
+EntryOutcome = Literal["SUCCESS", "TIMEOUT", "FAILURE", "STAGING_FAILURE"]
+
 
 def _execute_one(
     process_fn: Callable[[StagedEntry], None],
     entry: StagedEntry,
-) -> None:
-    """Picklable single-entry executor with per-task input file context."""
+    start_times: DictProxy | None = None,
+) -> float:
+    """Picklable single-entry executor with per-task input file context.
+
+    Returns wall-clock processing seconds for this entry. When ``start_times`` is
+    provided, records the worker-local monotonic start time under ``str(entry.active)``
+    so the main process can apply per-entry timeouts without counting queue wait.
+    """
     token = set_input_file_context(entry.active.name)
+    started = time.monotonic()
+    if start_times is not None:
+        start_times[str(entry.active)] = started
     try:
         process_fn(entry)
     finally:
         reset_input_file_context(token)
+    return time.monotonic() - started
 
 
 class ProcessingWorkflow(ABC):
@@ -177,7 +190,11 @@ class ProcessingWorkflow(ABC):
                 "with staging errors"
             )
             for entry in skipped:
-                self._report_staging_failure(entry)
+                self._status_entry(
+                    entry,
+                    "STAGING_FAILURE",
+                    detail=" | ".join(error.message for error in entry.errors),
+                )
 
         self.log(
             f"Starting workflow with {len(runnable)} runnable "
@@ -228,84 +245,116 @@ class ProcessingWorkflow(ABC):
                 runnable.append(entry)
         return runnable, skipped
 
-    def _report_staging_failure(self, entry: StagedEntry) -> None:
-        self.status(
-            f"{entry.active} | STAGING_FAILURE | "
-            f"{' | '.join(error.message for error in entry.errors)}"
-        )
-
-    def _report_future_result(self, fut: Future[None], entry: StagedEntry) -> None:
-        try:
-            if self._timeout is not None:
-                fut.result(timeout=self._timeout)
-            else:
-                fut.result()
+    def _status_entry(
+        self,
+        entry: StagedEntry,
+        outcome: EntryOutcome,
+        *,
+        detail: str = "",
+    ) -> None:
+        """Write one ``status.log`` line for ``entry``."""
+        if outcome == "SUCCESS":
             self.status(f"{entry.active} | SUCCESS")
-        except TimeoutError:
+        elif outcome == "TIMEOUT":
             self.status(f"{entry.active} | TIMEOUT | exceeded {self._timeout}s")
+        elif outcome == "FAILURE":
+            self.status(f"{entry.active} | FAILURE | {detail}")
+        else:
+            self.status(f"{entry.active} | STAGING_FAILURE | {detail}")
+
+    def _status_future(self, fut: Future[float], entry: StagedEntry) -> None:
+        """Report the processing outcome for a completed worker future."""
+        try:
+            elapsed = fut.result()
+            if self._timeout is not None and elapsed > self._timeout:
+                self._status_entry(entry, "TIMEOUT")
+            else:
+                self._status_entry(entry, "SUCCESS")
         except Exception:
             tb = traceback.format_exc().strip().replace("\n", "\n  ")
-            self.status(f"{entry.active} | FAILURE | {tb}")
+            self._status_entry(entry, "FAILURE", detail=tb)
 
     def _run_serial(self, entries: list[StagedEntry]) -> None:
         if self._timeout is None:
             for entry in entries:
                 try:
                     _execute_one(self.process_single, entry)
-                    self.status(f"{entry.active} | SUCCESS")
+                    self._status_entry(entry, "SUCCESS")
                 except Exception:
                     tb = traceback.format_exc().strip().replace("\n", "\n  ")
-                    self.status(f"{entry.active} | FAILURE | {tb}")
+                    self._status_entry(entry, "FAILURE", detail=tb)
             return
 
         with ThreadPoolExecutor(max_workers=1) as executor:
             for entry in entries:
                 fut = executor.submit(_execute_one, self.process_single, entry)
-                self._report_future_result(fut, entry)
+                try:
+                    elapsed = fut.result(timeout=self._timeout)
+                    if elapsed > self._timeout:
+                        self._status_entry(entry, "TIMEOUT")
+                    else:
+                        self._status_entry(entry, "SUCCESS")
+                except TimeoutError:
+                    self._status_entry(entry, "TIMEOUT")
+                    # Release the single worker thread before submitting the next entry.
+                    fut.result()
+                except Exception:
+                    tb = traceback.format_exc().strip().replace("\n", "\n  ")
+                    self._status_entry(entry, "FAILURE", detail=tb)
 
     def _run_parallel(
         self, entries: list[StagedEntry], parallel: ParallelLogging
     ) -> None:
-        with ProcessPoolExecutor(
-            max_workers=self._num_workers,
-            initializer=parallel.worker_init_fn,
-        ) as pool:
-            futures = {
-                pool.submit(_execute_one, self.process_single, entry): entry
-                for entry in entries
-            }
-            if self._timeout is None:
-                for fut in as_completed(futures):
-                    self._report_future_result(fut, futures[fut])
-                return
-
-            submit_times = {fut: time.monotonic() for fut in futures}
-            handled: set[Future[None]] = set()
-            poll_interval = min(0.5, self._timeout / 10)
-
-            while len(handled) < len(futures):
-                remaining = {
-                    fut: entry for fut, entry in futures.items() if fut not in handled
+        manager = multiprocessing.Manager() if self._timeout is not None else None
+        try:
+            start_times = manager.dict() if manager is not None else None
+            with ProcessPoolExecutor(
+                max_workers=self._num_workers,
+                initializer=parallel.worker_init_fn,
+            ) as pool:
+                futures = {
+                    pool.submit(
+                        _execute_one, self.process_single, entry, start_times
+                    ): entry
+                    for entry in entries
                 }
-                done, not_done = wait(
-                    remaining.keys(),
-                    timeout=poll_interval,
-                    return_when=FIRST_COMPLETED,
-                )
-                for fut in done:
-                    if fut in handled:
-                        continue
-                    self._report_future_result(fut, remaining[fut])
-                    handled.add(fut)
+                if self._timeout is None:
+                    for fut in as_completed(futures):
+                        self._status_future(fut, futures[fut])
+                    return
 
-                now = time.monotonic()
-                for fut in not_done:
-                    if now - submit_times[fut] > self._timeout:
-                        entry = remaining[fut]
-                        self.status(
-                            f"{entry.active} | TIMEOUT | exceeded {self._timeout}s"
-                        )
+                handled: set[Future[float]] = set()
+                poll_interval = min(0.5, self._timeout / 10)
+
+                while len(handled) < len(futures):
+                    remaining = {
+                        fut: entry
+                        for fut, entry in futures.items()
+                        if fut not in handled
+                    }
+                    done, not_done = wait(
+                        remaining.keys(),
+                        timeout=poll_interval,
+                        return_when=FIRST_COMPLETED,
+                    )
+                    for fut in done:
+                        if fut in handled:
+                            continue
+                        self._status_future(fut, remaining[fut])
                         handled.add(fut)
+
+                    now = time.monotonic()
+                    for fut in not_done:
+                        entry = remaining[fut]
+                        if start_times is None:
+                            continue
+                        started = start_times.get(str(entry.active))
+                        if started is not None and now - started > self._timeout:
+                            self._status_entry(entry, "TIMEOUT")
+                            handled.add(fut)
+        finally:
+            if manager is not None:
+                manager.shutdown()
 
 
 class PlanningWorkflow(ProcessingWorkflow):
