@@ -18,7 +18,7 @@ from multiprocessing import Queue
 BLUE = "\033[94m"
 RESET = "\033[0m"
 
-_DEFAULT_ENQUEUE_TIMEOUT = 30.0
+_DEFAULT_ENQUEUE_TIMEOUT = 1.0
 
 _input_file_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "input_file", default="-"
@@ -33,6 +33,9 @@ class BlockingQueueHandler(QueueHandler):
     ``handleError`` (often silently). Under parallel load that produces short log bursts
     per entry, most worker records can be lost while main-process status logging remains
     complete.
+
+    Uses a short blocking timeout so a backed-up log queue cannot stall pipeline workers
+    for long periods (e.g. on slow network filesystems).
     """
 
     def __init__(

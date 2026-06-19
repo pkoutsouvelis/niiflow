@@ -53,6 +53,11 @@ class ParallelLogging:
     def stop(self) -> None:
         """Flush remaining records and join the listener thread."""
         self.listener.stop()
+        for handler in self.listener.handlers:
+            target = (
+                handler._handler if isinstance(handler, FlushingHandler) else handler
+            )
+            target.flush()
 
     def __enter__(self) -> ParallelLogging:
         return self
@@ -228,11 +233,13 @@ class LoggingManager:
             handler.addFilter(SafeFieldFilter())
             if isinstance(handler, logging.FileHandler):
                 handler.setFormatter(logging.Formatter(file_fmt, "%Y-%m-%d %H:%M:%S"))
+                listener_handlers.append(handler)
             else:
                 handler.setFormatter(
                     ColorFilenameFormatter(stream_fmt, "%Y-%m-%d %H:%M:%S")
                 )
-            listener_handlers.append(FlushingHandler(handler))
+                # Flush console only; per-record flush on GPFS files stalls workers.
+                listener_handlers.append(FlushingHandler(handler))
 
         listener = QueueListener(queue, *listener_handlers)
         listener.start()

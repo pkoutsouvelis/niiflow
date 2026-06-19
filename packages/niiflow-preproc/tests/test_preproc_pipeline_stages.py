@@ -48,6 +48,7 @@ from niiflow.preproc.pipelines.pipeline_stages import (
 )
 from niiflow.preproc.pipelines.pipeline_stages.pipeline_stage import (
     ArtifactPathRecord,
+    _resolve_ctx_refs,
 )
 
 STEP_ID = "step"
@@ -979,6 +980,28 @@ class TestShippedStageConstruction:
                 },
                 save_options={},
             )
+
+
+class TestCtxRefResolution:
+    def test_resolve_ctx_refs_expands_list_elements(self, tmp_path: Path) -> None:
+        t1_transform = _touch(tmp_path / "t1.mat")
+        flair_transform = _touch(tmp_path / "flair.mat")
+        ctx = RuntimeContext(
+            artifacts={
+                "t1_to_mni": {"fwdtransforms": [str(t1_transform)]},
+                "flair_to_t1": {"fwdtransforms": [str(flair_transform)]},
+            }
+        )
+
+        resolved = _resolve_ctx_refs(
+            [
+                "ctx.artifacts.t1_to_mni.fwdtransforms.[0]",
+                "ctx.artifacts.flair_to_t1.fwdtransforms.[0]",
+            ],
+            ctx,
+        )
+
+        assert resolved == [str(t1_transform), str(flair_transform)]
 
 
 class TestShippedStageRun:

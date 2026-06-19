@@ -102,6 +102,19 @@ def _resolve_ctx_path(ctx: RuntimeContext, ref: str) -> Any:
     return obj
 
 
+def _resolve_ctx_refs(value: Any, ctx: RuntimeContext) -> Any:
+    """Recursively resolve ``ctx.`` string references in nested param values."""
+    if isinstance(value, str) and value.startswith(_CTX_PREFIX):
+        return _resolve_ctx_path(ctx, value)
+    if isinstance(value, list):
+        return [_resolve_ctx_refs(item, ctx) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_resolve_ctx_refs(item, ctx) for item in value)
+    if isinstance(value, dict):
+        return {key: _resolve_ctx_refs(item, ctx) for key, item in value.items()}
+    return value
+
+
 @dataclass(frozen=True)
 class ArtifactPathRecord:
     """Disk record for a saved logical artifact.
@@ -352,9 +365,7 @@ class PipelineStage(ABC):
 
         ``params`` is not mutated. Returns ``True`` when the stage should run.
         """
-        enable = params.get("enable", True)
-        if isinstance(enable, str) and enable.startswith(_CTX_PREFIX):
-            enable = _resolve_ctx_path(ctx, enable)
+        enable = _resolve_ctx_refs(params.get("enable", True), ctx)
         if not isinstance(enable, bool):
             enable = self.load_param("enable", enable)
         if not isinstance(enable, bool):
@@ -371,9 +382,7 @@ class PipelineStage(ABC):
         """
         resolved: dict[str, Any] = {}
         for key, value in params.items():
-            if isinstance(value, str) and value.startswith(_CTX_PREFIX):
-                value = _resolve_ctx_path(ctx, value)
-            resolved[key] = self.load_param(key, value)
+            resolved[key] = self.load_param(key, _resolve_ctx_refs(value, ctx))
         return resolved
 
     def _save_outputs(self, outputs: dict[str, Any]) -> dict[str, SavedPathRecord]:
