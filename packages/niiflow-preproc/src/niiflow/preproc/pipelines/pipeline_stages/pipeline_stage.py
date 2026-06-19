@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal, TypeAlias, get_args
 
 from niiflow.preproc.utils.file import resolve_path
+from niiflow.preproc.utils.misc import split_dotted_path
 
 logger = logging.getLogger(__name__)
 
@@ -65,26 +66,39 @@ class RuntimeContext:
 def _resolve_ctx_path(ctx: RuntimeContext, ref: str) -> Any:
     """Resolve a dotted ``ctx.<path>`` parameter reference against ``ctx``.
 
-    Walks attributes on :class:`RuntimeContext` and keys on nested dicts (e.g.
-    ``ctx.metadata.subject``, ``ctx.artifacts.<step_id>.<output>``). Artifact outputs
+    Walks attributes on :class:`RuntimeContext`, keys on nested dicts, and list indices
+    written as ``[idx]`` (e.g. ``ctx.metadata.subject``,
+    ``ctx.artifacts.<step_id>.<output>``, ``ctx.steps_completed.[0]``). Artifact outputs
     are addressed by explicit pipeline step id, not by position.
     """
     if not isinstance(ref, str) or not ref.startswith(_CTX_PREFIX):
         raise ValueError(f"Context path must start with 'ctx.', got {ref!r}")
-    parts = ref[len(_CTX_PREFIX) :].split(".")
-    if not parts or any(part == "" for part in parts):
+    try:
+        parts = split_dotted_path(ref[len(_CTX_PREFIX) :])
+    except ValueError as exc:
+        raise ValueError(f"Context path {ref!r} has invalid segments") from exc
+    if not parts:
         raise ValueError(f"Context path {ref!r} has empty segments")
 
     obj: Any = ctx
     walked: list[str] = ["ctx"]
     for part in parts:
-        walked.append(part)
-        try:
-            obj = obj[part] if isinstance(obj, dict) else getattr(obj, part)
-        except (AttributeError, KeyError, TypeError) as exc:
-            raise KeyError(
-                f"Failed to resolve context path '{'.'.join(walked)}': {exc}"
-            ) from exc
+        if isinstance(part, int):
+            walked.append(f"[{part}]")
+            try:
+                obj = obj[part]
+            except (IndexError, KeyError, TypeError) as exc:
+                raise KeyError(
+                    f"Failed to resolve context path '{'.'.join(walked)}': {exc}"
+                ) from exc
+        else:
+            walked.append(part)
+            try:
+                obj = obj[part] if isinstance(obj, dict) else getattr(obj, part)
+            except (AttributeError, KeyError, TypeError) as exc:
+                raise KeyError(
+                    f"Failed to resolve context path '{'.'.join(walked)}': {exc}"
+                ) from exc
     return obj
 
 

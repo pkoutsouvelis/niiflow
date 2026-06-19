@@ -105,6 +105,24 @@ def _proc_log_info(entry: StagedEntry) -> None:
     logging.getLogger().info(entry.params.get("message", "WORKER_INFO"))
 
 
+def _proc_log_burst(entry: StagedEntry) -> None:
+    """Emit several INFO lines per entry, similar to a short pipeline run."""
+    from niiflow.preproc.workflows.logging_utils import (
+        reset_input_file_context,
+        set_input_file_context,
+    )
+
+    token = set_input_file_context(entry.active.name)
+    try:
+        logger = logging.getLogger(
+            "niiflow.preproc.pipelines.pipeline_stages.pipeline_stage"
+        )
+        for index in range(int(entry.params.get("log_lines", 6))):
+            logger.info(f"[Stage test | step] line {index}")
+    finally:
+        reset_input_file_context(token)
+
+
 @pytest.fixture
 def dataset_root(tmp_path: Path) -> Path:
     root = tmp_path / "dataset"
@@ -474,6 +492,43 @@ class TestDynamicWorkflowRun:
         assert f"{file_path.resolve()} | SUCCESS" in (
             logs_dir / "status.log"
         ).read_text(encoding="utf-8")
+
+    def test_parallel_worker_logs_capture_burst(
+        self,
+        dataset_root: Path,
+        logs_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        wf = _workflow(
+            pipeline_params={"steps": [], "log_lines": 6},
+            explorer_params={"pattern": "*.nii*"},
+            num_workers=4,
+            logs_root=logs_dir,
+        )
+        monkeypatch.setattr(wf, "process_single", _proc_log_burst)
+
+        wf.run(dataset_root)
+
+        status_lines = [
+            line
+            for line in (logs_dir / "status.log")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        ]
+        worker_lines = [
+            line
+            for line in (logs_dir / "workers.log")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        ]
+        expected_worker_lines = len(status_lines) * 6
+        assert len(status_lines) == 7
+        assert len(worker_lines) >= int(expected_worker_lines * 0.95), (
+            f"expected at least {int(expected_worker_lines * 0.95)} worker log lines, "
+            f"got {len(worker_lines)}"
+        )
 
 
 class TestDynamicWorkflowPipeline:

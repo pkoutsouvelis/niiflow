@@ -25,6 +25,18 @@ from niiflow.preproc.workflows.logging_utils import (
 )
 
 
+class FlushingHandler(logging.Handler):
+    """Call ``flush`` on the wrapped handler after every emitted record."""
+
+    def __init__(self, handler: logging.Handler) -> None:
+        super().__init__(level=logging.NOTSET)
+        self._handler = handler
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self._handler.emit(record)
+        self._handler.flush()
+
+
 @dataclass(frozen=True)
 class ParallelLogging:
     """Bundle returned by :meth:`LoggingManager.setup_parallel_logging`.
@@ -211,6 +223,7 @@ class LoggingManager:
             )
             file_fmt = "%(asctime)s | %(levelname)s | %(input_file)s | %(message)s"
 
+        listener_handlers: list[logging.Handler] = []
         for handler in handlers:
             handler.addFilter(SafeFieldFilter())
             if isinstance(handler, logging.FileHandler):
@@ -219,8 +232,9 @@ class LoggingManager:
                 handler.setFormatter(
                     ColorFilenameFormatter(stream_fmt, "%Y-%m-%d %H:%M:%S")
                 )
+            listener_handlers.append(FlushingHandler(handler))
 
-        listener = QueueListener(queue, *handlers)
+        listener = QueueListener(queue, *listener_handlers)
         listener.start()
 
         init_fn = partial(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 __all__ = [
+    "BlockingQueueHandler",
     "setup_worker_logging",
     "set_input_file_context",
     "ColorFilenameFormatter",
@@ -17,9 +18,42 @@ from multiprocessing import Queue
 BLUE = "\033[94m"
 RESET = "\033[0m"
 
+_DEFAULT_ENQUEUE_TIMEOUT = 30.0
+
 _input_file_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "input_file", default="-"
 )
+
+
+class BlockingQueueHandler(QueueHandler):
+    """Forward worker records to the main-process listener without dropping them.
+
+    The stdlib :class:`QueueHandler` uses ``put_nowait``; when the
+    :class:`multiprocessing.Queue` pipe buffer is full, records are discarded via
+    ``handleError`` (often silently). Under parallel load that produces short log bursts
+    per entry, most worker records can be lost while main-process status logging remains
+    complete.
+    """
+
+    def __init__(
+        self,
+        queue: Queue,
+        *,
+        enqueue_timeout: float | None = _DEFAULT_ENQUEUE_TIMEOUT,
+    ) -> None:
+        super().__init__(queue)
+        self.enqueue_timeout = enqueue_timeout
+
+    def enqueue(self, record: logging.LogRecord) -> None:
+        try:
+            if self.enqueue_timeout is None:
+                self.queue.put(record)  # type: ignore[attr-defined]
+            else:
+                self.queue.put(  # type: ignore[attr-defined]
+                    record, block=True, timeout=self.enqueue_timeout
+                )
+        except Exception:
+            self.handleError(record)
 
 
 def setup_worker_logging(
@@ -29,9 +63,9 @@ def setup_worker_logging(
 ) -> None:
     """Configure the worker-process root logger.
 
-    Installs a :class:`QueueHandler` that forwards every record to the main-process
-    :class:`QueueListener`, and a :class:`ContextVarFilter` that stamps each record with
-    the current ``input_file`` context.
+    Installs a :class:`BlockingQueueHandler` that forwards every record to the main-
+    process :class:`logging.handlers.QueueListener`, and a :class:`ContextVarFilter`
+    that stamps each record with the current ``input_file`` context.
 
     Called once per worker by the pool's ``initializer``.
     """
@@ -51,7 +85,7 @@ def setup_worker_logging(
     root = logging.getLogger()
     root.setLevel(level)
     root.handlers.clear()
-    handler = QueueHandler(log_queue)
+    handler = BlockingQueueHandler(log_queue)
     handler.addFilter(ContextVarFilter())
     root.addHandler(handler)
 
