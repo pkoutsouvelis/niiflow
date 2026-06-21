@@ -2,7 +2,10 @@
 
 All functions in this module accept an optional ``limit_to`` mask that restricts the
 statistics used to drive the transformation (percentiles, mean/std, min/max) to a region
-of interest. Outputs are always fresh arrays; inputs are never modified in place.
+of interest. :func:`clamp_intensities`, :func:`z_transform_norm`, and
+:func:`minmax_norm` additionally accept a ``non_zero`` flag that restricts both the
+statistics and the transformed region to the non-zero voxels of the input. Outputs are
+always fresh arrays; inputs are never modified in place.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ __all__ = [
 
 import numpy as np
 
-from .utils import resolve_limit_to_mask, validate_numeric_array
+from .utils import resolve_norm_mask, validate_numeric_array
 
 
 def clamp_intensities(
@@ -23,6 +26,7 @@ def clamp_intensities(
     lower_pct: float = 1.0,
     upper_pct: float = 99.0,
     limit_to: np.ndarray | None = None,
+    non_zero: bool = False,
 ) -> np.ndarray:
     """Clamp array values to a percentile range.
 
@@ -46,6 +50,11 @@ def clamp_intensities(
             given, statistics are computed from the masked region and
             clipping is applied only to the masked region. Defaults to
             ``None``.
+        non_zero:
+            When ``True``, restrict both the percentile computation and the
+            clipping to the non-zero voxels of `array`; zero voxels are left
+            untouched. Combined with `limit_to` by intersection. Defaults to
+            ``False``.
 
     Returns:
         A clipped copy of `array` with the same shape and dtype.
@@ -58,12 +67,12 @@ def clamp_intensities(
         )
 
     result = array.copy()
-    if limit_to is None:
+    mask = resolve_norm_mask(array, limit_to, non_zero)
+    if mask is None:
         lower, upper = np.percentile(result, [lower_pct, upper_pct])
         np.clip(result, lower, upper, out=result)
         return result
 
-    mask = resolve_limit_to_mask(limit_to, array.shape)
     lower, upper = np.percentile(result[mask], [lower_pct, upper_pct])
     result[mask] = np.clip(result[mask], lower, upper)
     return result
@@ -72,6 +81,7 @@ def clamp_intensities(
 def z_transform_norm(
     array: np.ndarray,
     limit_to: np.ndarray | None = None,
+    non_zero: bool = False,
 ) -> np.ndarray:
     """Z-score normalize an array: ``(array - mean) / std``.
 
@@ -87,6 +97,11 @@ def z_transform_norm(
             array or a numeric array containing only ``0`` and ``1``. When
             given, mean and standard deviation are computed from the
             masked region only. Defaults to ``None``.
+        non_zero:
+            When ``True``, compute the mean and standard deviation from the
+            non-zero voxels of `array` and apply the transform only to those
+            voxels; zero voxels remain zero. Combined with `limit_to` by
+            intersection for the statistics. Defaults to ``False``.
 
     Returns:
         A z-transformed copy of `array` as ``float64`` with the same shape.
@@ -97,11 +112,8 @@ def z_transform_norm(
     """
     validate_numeric_array(array)
 
-    sample = (
-        array
-        if limit_to is None
-        else array[resolve_limit_to_mask(limit_to, array.shape)]
-    )
+    mask = resolve_norm_mask(array, limit_to, non_zero)
+    sample = array if mask is None else array[mask]
 
     mean = float(np.mean(sample))
     std = float(np.std(sample))
@@ -111,12 +123,18 @@ def z_transform_norm(
             "cannot z-transform a constant input."
         )
 
-    return (array.astype(np.float64, copy=True) - mean) / std
+    result = array.astype(np.float64, copy=True)
+    if non_zero:
+        apply_mask = array != 0
+        result[apply_mask] = (result[apply_mask] - mean) / std
+        return result
+    return (result - mean) / std
 
 
 def minmax_norm(
     array: np.ndarray,
     limit_to: np.ndarray | None = None,
+    non_zero: bool = False,
 ) -> np.ndarray:
     """Min-max normalize an array to the ``[0, 1]`` range.
 
@@ -133,6 +151,11 @@ def minmax_norm(
             array or a numeric array containing only ``0`` and ``1``. When
             given, min and max are computed from the masked region only.
             Defaults to ``None``.
+        non_zero:
+            When ``True``, compute min and max from the non-zero voxels of
+            `array` and apply the transform only to those voxels; zero voxels
+            remain zero. Combined with `limit_to` by intersection for the
+            statistics. Defaults to ``False``.
 
     Returns:
         A min-max-normalized copy of `array` as ``float64`` with the same
@@ -144,11 +167,8 @@ def minmax_norm(
     """
     validate_numeric_array(array)
 
-    sample = (
-        array
-        if limit_to is None
-        else array[resolve_limit_to_mask(limit_to, array.shape)]
-    )
+    mask = resolve_norm_mask(array, limit_to, non_zero)
+    sample = array if mask is None else array[mask]
 
     minimum = float(np.min(sample))
     maximum = float(np.max(sample))
@@ -158,4 +178,9 @@ def minmax_norm(
             "cannot min-max normalize a constant input."
         )
 
-    return (array.astype(np.float64, copy=True) - minimum) / (maximum - minimum)
+    result = array.astype(np.float64, copy=True)
+    if non_zero:
+        apply_mask = array != 0
+        result[apply_mask] = (result[apply_mask] - minimum) / (maximum - minimum)
+        return result
+    return (result - minimum) / (maximum - minimum)

@@ -36,6 +36,9 @@ class ClampIntensities(PipelineStage):
     * ``upper_pct`` — upper percentile bound in ``[0, 100]`` (default ``99.0``).
     * ``limit_to`` — optional mask restricting statistics and clipping
       (:class:`ants.core.ANTsImage`, path, or ``None``).
+    * ``non_zero`` — when ``True``, restrict both the percentile computation and
+      the clipping to the non-zero voxels of the image; zero voxels are left
+      untouched. Combined with ``limit_to`` by intersection (default ``False``).
 
     **Outputs** (from :meth:`forward`):
 
@@ -94,6 +97,9 @@ class ZTransformNorm(PipelineStage):
     * ``image`` — :class:`ants.core.ANTsImage` or path to load.
     * ``limit_to`` — optional mask restricting mean/std computation
       (:class:`ants.core.ANTsImage`, path, or ``None``).
+    * ``non_zero`` — when ``True``, compute mean/std from the non-zero voxels and
+      apply the transform only to those voxels; zero voxels remain zero. Combined
+      with ``limit_to`` by intersection for the statistics (default ``False``).
 
     **Outputs** (from :meth:`forward`):
 
@@ -152,6 +158,9 @@ class MinmaxNorm(PipelineStage):
     * ``image`` — :class:`ants.core.ANTsImage` or path to load.
     * ``limit_to`` — optional mask restricting min/max computation
       (:class:`ants.core.ANTsImage`, path, or ``None``).
+    * ``non_zero`` — when ``True``, compute min/max from the non-zero voxels and
+      apply the transform only to those voxels; zero voxels remain zero. Combined
+      with ``limit_to`` by intersection for the statistics (default ``False``).
 
     **Outputs** (from :meth:`forward`):
 

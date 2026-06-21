@@ -31,8 +31,13 @@ def clamp_intensities(
     lower_pct: float = 1.0,
     upper_pct: float = 99.0,
     limit_to: ANTsImage | None = None,
+    non_zero: bool = False,
 ) -> ANTsImage:
-    """Clamp ANTsImage intensities to a percentile range."""
+    """Clamp ANTsImage intensities to a percentile range.
+
+    When ``non_zero`` is ``True``, both the percentile computation and the clipping are
+    restricted to the non-zero voxels of the image.
+    """
     image_array, metadata = ants_to_numpy_with_metadata(image)
     mask_array = None
     if limit_to is not None:
@@ -44,6 +49,7 @@ def clamp_intensities(
         lower_pct=lower_pct,
         upper_pct=upper_pct,
         limit_to=mask_array,
+        non_zero=non_zero,
     )
     return numpy_to_ants_with_metadata(out_array, metadata)
 
@@ -51,8 +57,14 @@ def clamp_intensities(
 def z_transform_norm(
     image: ANTsImage,
     limit_to: ANTsImage | None = None,
+    non_zero: bool = False,
 ) -> ANTsImage:
-    """Apply z-transform normalization to an ANTsImage."""
+    """Apply z-transform normalization to an ANTsImage.
+
+    When ``non_zero`` is ``True``, the mean and standard deviation are computed from the
+    non-zero voxels and the transform is applied only to those voxels; zero voxels
+    remain zero.
+    """
     image_array, metadata = ants_to_numpy_with_metadata(image)
     mask_array = None
     if limit_to is not None:
@@ -60,7 +72,7 @@ def z_transform_norm(
         mask_array = limit_to.numpy()
 
     out_array = _array_intensity_normalization.z_transform_norm(
-        array=image_array, limit_to=mask_array
+        array=image_array, limit_to=mask_array, non_zero=non_zero
     )
     return numpy_to_ants_with_metadata(out_array, metadata)
 
@@ -68,8 +80,13 @@ def z_transform_norm(
 def minmax_norm(
     image: ANTsImage,
     limit_to: ANTsImage | None = None,
+    non_zero: bool = False,
 ) -> ANTsImage:
-    """Apply min-max normalization to an ANTsImage."""
+    """Apply min-max normalization to an ANTsImage.
+
+    When ``non_zero`` is ``True``, min and max are computed from the non-zero voxels and
+    the transform is applied only to those voxels; zero voxels remain zero.
+    """
     image_array, metadata = ants_to_numpy_with_metadata(image)
     mask_array = None
     if limit_to is not None:
@@ -77,6 +94,6 @@ def minmax_norm(
         mask_array = limit_to.numpy()
 
     out_array = _array_intensity_normalization.minmax_norm(
-        array=image_array, limit_to=mask_array
+        array=image_array, limit_to=mask_array, non_zero=non_zero
     )
     return numpy_to_ants_with_metadata(out_array, metadata)

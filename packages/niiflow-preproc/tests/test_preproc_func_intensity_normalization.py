@@ -148,6 +148,39 @@ class TestClampIntensities:
         )
         np.testing.assert_array_equal(out, reference)
 
+    def test_non_zero_matches_explicit_nonzero_limit_to(self) -> None:
+        arr = np.array([0.0, 0.0, -50, 1, 2, 3, 4, 5, 6, 50.0])
+
+        out = clamp_intensities(arr, lower_pct=25.0, upper_pct=75.0, non_zero=True)
+        reference = clamp_intensities(
+            arr, lower_pct=25.0, upper_pct=75.0, limit_to=(arr != 0)
+        )
+        np.testing.assert_array_equal(out, reference)
+
+    def test_non_zero_leaves_zero_voxels_untouched(self) -> None:
+        arr = np.array([0.0, 0.0, -50, 1, 2, 3, 4, 5, 6, 50.0])
+
+        out = clamp_intensities(arr, lower_pct=25.0, upper_pct=75.0, non_zero=True)
+
+        assert out[0] == 0.0
+        assert out[1] == 0.0
+        # Non-zero voxels are clipped to the non-zero percentiles.
+        inside = arr[arr != 0]
+        lower, upper = np.percentile(inside, [25.0, 75.0])
+        np.testing.assert_array_equal(out[arr != 0], np.clip(inside, lower, upper))
+
+    def test_non_zero_combines_with_limit_to_by_intersection(self) -> None:
+        arr = np.array([0.0, 1, 2, 3, 4, 5, 6, 7, 8, 100.0])
+        limit = np.array([1, 1, 1, 1, 1, 1, 1, 1, 1, 0], dtype=bool)
+
+        out = clamp_intensities(
+            arr, lower_pct=10.0, upper_pct=90.0, limit_to=limit, non_zero=True
+        )
+        reference = clamp_intensities(
+            arr, lower_pct=10.0, upper_pct=90.0, limit_to=(limit & (arr != 0))
+        )
+        np.testing.assert_array_equal(out, reference)
+
 
 class TestClampIntensitiesValidation:
     """Every documented contract violation must raise ``ValueError``."""
@@ -199,6 +232,10 @@ class TestClampIntensitiesValidation:
     def test_rejects_empty_limit_to_mask(self, simple_array: np.ndarray) -> None:
         with pytest.raises(ValueError, match="empty"):
             clamp_intensities(simple_array, limit_to=np.zeros(10, dtype=bool))
+
+    def test_non_zero_on_all_zero_array_raises(self) -> None:
+        with pytest.raises(ValueError, match="empty"):
+            clamp_intensities(np.zeros(10, dtype=np.float64), non_zero=True)
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +327,45 @@ class TestZTransformNorm:
         with pytest.raises(ValueError, match="Standard deviation"):
             z_transform_norm(arr, limit_to=mask)
 
+    def test_non_zero_uses_nonzero_statistics_and_keeps_zeros(self) -> None:
+        arr = np.array([0.0, 1, 2, 3, 4, 5, 6, 7, 8, 0.0])
+
+        out = z_transform_norm(arr, non_zero=True)
+
+        nz = arr != 0
+        mean = arr[nz].mean()
+        std = arr[nz].std()
+        expected = arr.astype(np.float64, copy=True)
+        expected[nz] = (arr[nz] - mean) / std
+        np.testing.assert_allclose(out, expected)
+
+        # Zero voxels remain exactly zero.
+        assert out[0] == 0.0
+        assert out[-1] == 0.0
+        # The non-zero region is unit-variance / zero-mean.
+        assert out[nz].mean() == pytest.approx(0.0, abs=1e-12)
+        assert out[nz].std() == pytest.approx(1.0, abs=1e-12)
+
+    def test_non_zero_differs_from_unmasked(self) -> None:
+        arr = np.array([0.0, 1, 2, 3, 4, 5, 6, 7, 8, 0.0])
+        assert not np.allclose(
+            z_transform_norm(arr), z_transform_norm(arr, non_zero=True)
+        )
+
+    def test_non_zero_combines_with_limit_to_for_statistics(self) -> None:
+        arr = np.array([0.0, 1, 2, 3, 4, 5, 6, 7, 8, 100.0])
+        limit = np.array([1, 1, 1, 1, 1, 1, 1, 1, 1, 0], dtype=bool)
+
+        out = z_transform_norm(arr, limit_to=limit, non_zero=True)
+
+        stat_mask = limit & (arr != 0)
+        mean = arr[stat_mask].mean()
+        std = arr[stat_mask].std()
+        expected = arr.astype(np.float64, copy=True)
+        apply_mask = arr != 0
+        expected[apply_mask] = (arr[apply_mask] - mean) / std
+        np.testing.assert_allclose(out, expected)
+
 
 class TestZTransformNormValidation:
     """Input validation contract for ``z_transform_norm``."""
@@ -316,6 +392,10 @@ class TestZTransformNormValidation:
     def test_rejects_empty_limit_to_mask(self, simple_array: np.ndarray) -> None:
         with pytest.raises(ValueError, match="empty"):
             z_transform_norm(simple_array, limit_to=np.zeros(10, dtype=bool))
+
+    def test_non_zero_on_all_zero_array_raises(self) -> None:
+        with pytest.raises(ValueError, match="empty"):
+            z_transform_norm(np.zeros(10, dtype=np.float64), non_zero=True)
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +487,41 @@ class TestMinmaxNorm:
         with pytest.raises(ValueError, match="Maximum equals minimum"):
             minmax_norm(arr, limit_to=mask)
 
+    def test_non_zero_uses_nonzero_statistics_and_keeps_zeros(self) -> None:
+        arr = np.array([0.0, 1, 2, 3, 4, 5, 6, 7, 8, 0.0])
+
+        out = minmax_norm(arr, non_zero=True)
+
+        nz = arr != 0
+        minimum = arr[nz].min()
+        maximum = arr[nz].max()
+        expected = arr.astype(np.float64, copy=True)
+        expected[nz] = (arr[nz] - minimum) / (maximum - minimum)
+        np.testing.assert_allclose(out, expected)
+
+        assert out[0] == 0.0
+        assert out[-1] == 0.0
+        assert out[nz].min() == pytest.approx(0.0)
+        assert out[nz].max() == pytest.approx(1.0)
+
+    def test_non_zero_differs_from_unmasked(self) -> None:
+        arr = np.array([0.0, 1, 2, 3, 4, 5, 6, 7, 8, 0.0])
+        assert not np.allclose(minmax_norm(arr), minmax_norm(arr, non_zero=True))
+
+    def test_non_zero_combines_with_limit_to_for_statistics(self) -> None:
+        arr = np.array([0.0, 1, 2, 3, 4, 5, 6, 7, 8, 100.0])
+        limit = np.array([1, 1, 1, 1, 1, 1, 1, 1, 1, 0], dtype=bool)
+
+        out = minmax_norm(arr, limit_to=limit, non_zero=True)
+
+        stat_mask = limit & (arr != 0)
+        minimum = arr[stat_mask].min()
+        maximum = arr[stat_mask].max()
+        expected = arr.astype(np.float64, copy=True)
+        apply_mask = arr != 0
+        expected[apply_mask] = (arr[apply_mask] - minimum) / (maximum - minimum)
+        np.testing.assert_allclose(out, expected)
+
 
 class TestMinmaxNormValidation:
     """Input validation contract for ``minmax_norm``."""
@@ -433,6 +548,10 @@ class TestMinmaxNormValidation:
     def test_rejects_empty_limit_to_mask(self, simple_array: np.ndarray) -> None:
         with pytest.raises(ValueError, match="empty"):
             minmax_norm(simple_array, limit_to=np.zeros(10, dtype=bool))
+
+    def test_non_zero_on_all_zero_array_raises(self) -> None:
+        with pytest.raises(ValueError, match="empty"):
+            minmax_norm(np.zeros(10, dtype=np.float64), non_zero=True)
 
 
 @pytest.fixture
@@ -511,6 +630,31 @@ class TestImageIntensityNormalization:
         np.testing.assert_allclose(
             minmaxed.numpy(), minmax_norm(arr, limit_to=mask_arr)
         )
+
+    def test_image_wrappers_accept_non_zero_flag(self, ants_mod) -> None:
+        arr = np.array(
+            [[0.0, 1.0, 2.0], [3.0, 4.0, 5.0], [6.0, 7.0, 0.0]],
+            dtype=np.float64,
+        )
+        img = ants_mod.from_numpy(arr)
+
+        clamped = image_intensity_normalization.clamp_intensities(
+            img, lower_pct=25.0, upper_pct=75.0, non_zero=True
+        )
+        zed = image_intensity_normalization.z_transform_norm(img, non_zero=True)
+        minmaxed = image_intensity_normalization.minmax_norm(img, non_zero=True)
+
+        np.testing.assert_allclose(
+            clamped.numpy(),
+            clamp_intensities(arr, lower_pct=25.0, upper_pct=75.0, non_zero=True),
+        )
+        np.testing.assert_allclose(zed.numpy(), z_transform_norm(arr, non_zero=True))
+        np.testing.assert_allclose(minmaxed.numpy(), minmax_norm(arr, non_zero=True))
+        # Background (zero) voxels are preserved by all three transforms.
+        assert zed.numpy()[0, 0] == 0.0
+        assert zed.numpy()[2, 2] == 0.0
+        assert minmaxed.numpy()[0, 0] == 0.0
+        assert minmaxed.numpy()[2, 2] == 0.0
 
     def test_image_wrappers_preserve_metadata(self, ants_mod) -> None:
         arr = np.array(

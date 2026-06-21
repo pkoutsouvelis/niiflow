@@ -62,3 +62,35 @@ def resolve_limit_to_mask(
             f"`limit_to` must have shape {array_shape}, got {limit_to.shape}"
         )
     return resolve_mask(limit_to, name="limit_to")
+
+
+def resolve_norm_mask(
+    array: np.ndarray,
+    limit_to: np.ndarray | None,
+    non_zero: bool,
+) -> np.ndarray | None:
+    """Combine a `limit_to` mask with an optional non-zero restriction.
+
+    Returns a boolean mask (same shape as `array`) selecting the voxels that
+    statistics and the transform should be restricted to, or ``None`` when
+    neither restriction is requested (operate on the full array).
+
+    When `non_zero` is ``True``, the non-zero voxels of `array` (``array != 0``)
+    are intersected with `limit_to` (when provided).
+
+    Raises:
+        ValueError: If `limit_to` is invalid, or if the combined region selects
+            no voxels (e.g. `non_zero=True` on an all-zero array).
+    """
+    mask: np.ndarray | None = None
+    if limit_to is not None:
+        mask = resolve_limit_to_mask(limit_to, array.shape)
+    if non_zero:
+        non_zero_mask = array != 0
+        mask = non_zero_mask if mask is None else (mask & non_zero_mask)
+    if mask is not None and not mask.any():
+        raise ValueError(
+            "The selected region is empty (no voxels remain after applying "
+            "`limit_to` / `non_zero`); nothing to compute statistics from."
+        )
+    return mask
