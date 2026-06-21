@@ -41,6 +41,7 @@ from niiflow.preproc.pipelines.pipeline_stages import (
     MinmaxNorm,
     PadToRange,
     PipelineStage,
+    Rename,
     Reorient,
     RuntimeContext,
     ToNumpy,
@@ -76,6 +77,7 @@ SHIPPED_STAGE_CLASSES: tuple[StageFactory, ...] = (
     CheckDimensions,
     ApplyMask,
     Delete,
+    Rename,
     Reorient,
     ToNumpy,
 )
@@ -101,6 +103,7 @@ PRIMARY_SAVE_KEY: dict[StageFactory, str] = {
     CheckDimensions: "passed",
     ApplyMask: "out_image",
     Delete: "deleted",
+    Rename: "path",
     Reorient: "out_image",
     ToNumpy: "array",
 }
@@ -261,6 +264,13 @@ def _delete_stage_config(
     return {"paths": [str(target)], "missing_ok": False}, {}
 
 
+def _rename_stage_config(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    source = _touch(tmp_path / "to_rename.txt")
+    return {"path": str(source), "dest": str(tmp_path / "renamed.txt")}, {"path": None}
+
+
 def _reorient_stage_config(
     tmp_path: Path,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -333,6 +343,7 @@ STAGE_CONFIG_BUILDERS: dict[
     CheckVoxelSpacing: _check_voxel_spacing_stage_config,
     CheckDimensions: _check_dimensions_stage_config,
     Delete: _delete_stage_config,
+    Rename: _rename_stage_config,
     ApplyMask: _apply_mask_stage_config,
     Reorient: _reorient_stage_config,
     ToNumpy: _to_numpy_stage_config,
@@ -381,6 +392,7 @@ STUB_FORWARD_OUTPUTS: dict[StageFactory, dict[str, Any]] = {
         },
     },
     Delete: {"deleted": []},
+    Rename: {"path": object()},
     ApplyMask: {"out_image": object()},
     Reorient: {"out_image": object()},
     ToNumpy: {"array": object(), "metadata": {}},
@@ -1380,4 +1392,61 @@ class TestQCStageReport:
             "passed": True,
             "value": [64, 64, 64],
             "id": "ctx.run_id",
+        }
+
+
+# ---------------------------------------------------------------------------
+# Rename — move/copy a file to a new location.
+# ---------------------------------------------------------------------------
+
+
+class TestRename:
+    def test_moves_file_to_new_location(self, tmp_path: Path) -> None:
+        src = _touch(tmp_path / "src.txt")
+        dest = tmp_path / "nested" / "dest.txt"
+        ctx = Rename(params={"path": str(src), "dest": str(dest)}).run(step_ctx())
+        assert dest.exists()
+        assert not src.exists()
+        assert ctx.artifacts[STEP_ID]["path"] == dest.resolve()
+
+    def test_copy_flag_preserves_source(self, tmp_path: Path) -> None:
+        src = _touch(tmp_path / "src.txt")
+        dest = tmp_path / "dest.txt"
+        Rename(params={"path": str(src), "dest": str(dest), "copy": True}).run(
+            step_ctx()
+        )
+        assert dest.exists()
+        assert src.exists()
+
+    def test_forward_raises_when_source_missing(self, tmp_path: Path) -> None:
+        stage = Rename(
+            params={
+                "path": str(tmp_path / "missing.txt"),
+                "dest": str(tmp_path / "dest.txt"),
+            }
+        )
+        with pytest.raises(FileNotFoundError):
+            stage.run(step_ctx())
+
+    def test_check_params_rejects_non_bool_copy(self, tmp_path: Path) -> None:
+        src = _touch(tmp_path / "src.txt")
+        with pytest.raises(TypeError, match="copy"):
+            Rename(
+                params={
+                    "path": str(src),
+                    "dest": str(tmp_path / "d.txt"),
+                    "copy": "yes",
+                }
+            )
+
+    def test_save_output_records_new_location_as_json(self, tmp_path: Path) -> None:
+        src = _touch(tmp_path / "src.txt")
+        dest = tmp_path / "dest.txt"
+        record_path = tmp_path / "rename.json"
+        Rename(
+            params={"path": str(src), "dest": str(dest)},
+            save_options={"path": str(record_path)},
+        ).run(step_ctx())
+        assert json.loads(record_path.read_text(encoding="utf-8")) == {
+            "path": str(dest.resolve())
         }

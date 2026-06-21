@@ -129,7 +129,7 @@ other `params`. This pairs naturally with a boolean QC artifact like
 `ANTsPreprocessBrainImage`, `ANTsRegistration`, `ANTsApplyTransforms`, `ANTsResample`,
 `ANTsResampleToTarget`, `Reorient`, `ClampIntensities`, `MinmaxNorm`, `ZTransformNorm`,
 `CenterCrop`, `CenterPad`, `CropToMask`, `CropToRange`, `PadToRange`, `CheckDimensions`,
-`CheckVoxelSpacing`, `ApplyMask`, `ToNumpy`, `Delete`.
+`CheckVoxelSpacing`, `ApplyMask`, `ToNumpy`, `Rename`, `Delete`.
 
 ---
 
@@ -456,7 +456,7 @@ niiflow-preproc/
     │       ├── intensity_normalization.py  # Clamp / Minmax / ZTransform
     │       ├── croppad.py            # CenterCrop / CenterPad / Crop/Pad-to-range
     │       ├── qc.py                 # CheckDimensions / CheckVoxelSpacing
-    │       ├── utility.py            # ApplyMask / Reorient / ToNumpy / Delete
+    │       ├── utility.py            # ApplyMask / Reorient / ToNumpy / Rename / Delete
     │       └── pipelines.py          # ANTsPreprocessBrainImage
     ├── workflows/
     │   ├── workflow.py               # ProcessingWorkflow / PlanningWorkflow (execution engine)

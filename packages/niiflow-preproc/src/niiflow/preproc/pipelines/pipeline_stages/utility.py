@@ -5,10 +5,12 @@ from __future__ import annotations
 __all__ = [
     "ApplyMask",
     "Delete",
+    "Rename",
     "Reorient",
     "ToNumpy",
 ]
 
+import shutil
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -98,6 +100,71 @@ class Delete(PipelineStage):
                     f"`deleted` must be a list of paths, got {type(value).__name__}"
                 )
             return write_json({"paths": [str(path) for path in value]}, output_path)
+        raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
+
+
+class Rename(PipelineStage):
+    """Move (or copy) a file to a new location.
+
+    **Parameters** (``params``):
+
+    * ``path`` — source file path, or a ``ctx.`` reference resolving to one. Must
+      exist on disk.
+    * ``dest`` — destination file path. Parent directories are created when
+      missing. An existing file at this path is overwritten.
+    * ``copy`` — when ``True``, copy the file (preserving metadata) instead of
+      moving it, leaving the source in place (default ``False``).
+
+    **Outputs** (from :meth:`forward`):
+
+    * ``path`` — resolved :class:`pathlib.Path` of the file at its new location.
+
+    **Persistence** (``save_options``):
+
+    * ``path`` — optional JSON path recording the new location as a string.
+    """
+
+    REQUIRED_PARAMS = frozenset({"path", "dest"})
+
+    def check_params(self, params: dict[str, Any]) -> None:
+        for key in ("path", "dest"):
+            value = params[key]
+            if not isinstance(value, (str, Path)):
+                raise TypeError(f"`{key}` must be a path, got {type(value).__name__}")
+        if "copy" in params and not isinstance(params["copy"], bool):
+            raise TypeError(
+                f"`copy` must be a boolean, got {type(params['copy']).__name__}"
+            )
+
+    def load_param(self, key: str, value: Any) -> Any:
+        if key in {"path", "dest"}:
+            return resolve_path(value)
+        if key == "copy":
+            if not isinstance(value, bool):
+                raise TypeError(f"`copy` must be a boolean, got {type(value).__name__}")
+            return value
+        return value
+
+    def forward(self, **params: Any) -> dict[str, Any]:
+        src: Path = params["path"]
+        dest: Path = params["dest"]
+        copy: bool = params.get("copy", False)
+
+        if not src.is_file():
+            raise FileNotFoundError(
+                f"Source path does not exist or is not a file: {src}"
+            )
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if copy:
+            shutil.copy2(src, dest)
+        else:
+            shutil.move(str(src), str(dest))
+        return {"path": dest}
+
+    def save_output(self, key: str, value: Any, output_path: Path) -> Path:
+        if key == "path":
+            return write_json({"path": str(value)}, output_path)
         raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
 
 

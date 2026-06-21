@@ -23,6 +23,7 @@ __all__ = [
     "PadToRange",
     "PipelineStage",
     "RuntimeContext",
+    "Rename",
     "Reorient",
     "ToNumpy",
     "ZTransformNorm",
@@ -45,4 +46,4 @@ from .registration import ANTsApplyTransforms, ANTsRegistration
 from .resampling import ANTsResample, ANTsResampleToTarget
 from .pipeline_stage import PipelineStage, RuntimeContext
 from .skull_stripping import ANTsBrainExtraction
-from .utility import ApplyMask, Delete, Reorient, ToNumpy
+from .utility import ApplyMask, Delete, Rename, Reorient, ToNumpy
