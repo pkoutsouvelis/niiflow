@@ -38,6 +38,7 @@ from niiflow.preproc.pipelines.pipeline_stages import (
     CropToMask,
     CropToRange,
     Delete,
+    GetImage,
     MinmaxNorm,
     PadToRange,
     PipelineStage,
@@ -77,6 +78,7 @@ SHIPPED_STAGE_CLASSES: tuple[StageFactory, ...] = (
     CheckDimensions,
     ApplyMask,
     Delete,
+    GetImage,
     Rename,
     Reorient,
     ToNumpy,
@@ -103,6 +105,7 @@ PRIMARY_SAVE_KEY: dict[StageFactory, str] = {
     CheckDimensions: "passed",
     ApplyMask: "out_image",
     Delete: "deleted",
+    GetImage: "out_image",
     Rename: "path",
     Reorient: "out_image",
     ToNumpy: "array",
@@ -271,6 +274,13 @@ def _rename_stage_config(
     return {"path": str(source), "dest": str(tmp_path / "renamed.txt")}, {"path": None}
 
 
+def _get_image_stage_config(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    image = _touch(tmp_path / "image.nii.gz")
+    return {"image": str(image)}, {"out_image": None}
+
+
 def _reorient_stage_config(
     tmp_path: Path,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -344,6 +354,7 @@ STAGE_CONFIG_BUILDERS: dict[
     CheckDimensions: _check_dimensions_stage_config,
     Delete: _delete_stage_config,
     Rename: _rename_stage_config,
+    GetImage: _get_image_stage_config,
     ApplyMask: _apply_mask_stage_config,
     Reorient: _reorient_stage_config,
     ToNumpy: _to_numpy_stage_config,
@@ -393,6 +404,7 @@ STUB_FORWARD_OUTPUTS: dict[StageFactory, dict[str, Any]] = {
     },
     Delete: {"deleted": []},
     Rename: {"path": object()},
+    GetImage: {"out_image": object()},
     ApplyMask: {"out_image": object()},
     Reorient: {"out_image": object()},
     ToNumpy: {"array": object(), "metadata": {}},
@@ -1450,3 +1462,70 @@ class TestRename:
         assert json.loads(record_path.read_text(encoding="utf-8")) == {
             "path": str(dest.resolve())
         }
+
+
+# ---------------------------------------------------------------------------
+# GetImage — materialise an image into the context (optionally QC-gated).
+# ---------------------------------------------------------------------------
+
+
+class TestGetImage:
+    @staticmethod
+    def _image() -> tuple[Any, Any]:
+        ants = pytest.importorskip("ants")
+        import numpy as np
+
+        return ants, ants.from_numpy(np.zeros((4, 5, 6), dtype="float32"))
+
+    def test_publishes_in_memory_image_to_context(self, tmp_path: Path) -> None:
+        _, image = self._image()
+        ctx = GetImage(params={"image": image}).run(step_ctx())
+        out_image = ctx.artifacts[STEP_ID]["out_image"]
+        assert isinstance(out_image, type(image))
+        assert tuple(out_image.shape) == (4, 5, 6)
+
+    def test_loads_image_from_path(self, tmp_path: Path) -> None:
+        ants, image = self._image()
+        src = tmp_path / "src.nii.gz"
+        ants.image_write(image, str(src))
+        ctx = GetImage(params={"image": str(src)}).run(step_ctx())
+        assert tuple(ctx.artifacts[STEP_ID]["out_image"].shape) == (4, 5, 6)
+
+    def test_saves_via_save_options_out_image(self, tmp_path: Path) -> None:
+        ants, image = self._image()
+        dest = tmp_path / "out" / "saved.nii.gz"
+        GetImage(
+            params={"image": image},
+            save_options={"out_image": str(dest)},
+        ).run(step_ctx())
+        assert dest.is_file()
+        ants.image_read(str(dest))  # round-trips as a readable image
+
+    def test_disabled_via_qc_artifact_skips_save(self, tmp_path: Path) -> None:
+        _, image = self._image()
+        dest = tmp_path / "out" / "saved.nii.gz"
+        ctx = RuntimeContext(step_id="save", artifacts={"qc": {"passed": False}})
+        out = GetImage(
+            params={"image": image, "enable": "ctx.artifacts.qc.passed"},
+            save_options={"out_image": str(dest)},
+        ).run(ctx)
+        assert not dest.exists()
+        assert "save" not in out.artifacts
+        assert out.steps_completed == []
+
+    def test_enabled_via_qc_artifact_saves(self, tmp_path: Path) -> None:
+        _, image = self._image()
+        dest = tmp_path / "out" / "saved.nii.gz"
+        ctx = RuntimeContext(step_id="save", artifacts={"qc": {"passed": True}})
+        out = GetImage(
+            params={"image": image, "enable": "ctx.artifacts.qc.passed"},
+            save_options={"out_image": str(dest)},
+        ).run(ctx)
+        assert dest.is_file()
+        assert out.steps_completed == ["save"]
+
+    def test_save_output_rejects_non_nifti_path(self, tmp_path: Path) -> None:
+        _, image = self._image()
+        stage = GetImage(params={"image": image})
+        with pytest.raises(ValueError, match=r"\.nii"):
+            stage.save_output("out_image", image, tmp_path / "out.txt")

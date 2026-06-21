@@ -123,13 +123,20 @@ other `params`. This pairs naturally with a boolean QC artifact like
 `"ctx.artifacts.qc.passed"`, so downstream gated steps may still declare
 `ctx.artifacts.<upstream>.<output>` inputs even when that upstream step was skipped.
 
+A common pairing is `GetImage` with this gate: it materialises an image into the context
+as `out_image`, so pointing `enable` at a QC artifact and setting
+`save_options["out_image"]` to a separate folder persists only the images that passed
+quality control, e.g. `params={"image": "ctx.artifacts.strip.out_image", "enable":
+"ctx.artifacts.qc.passed"}` with `save_options={"out_image":
+"/data/passed/sub-01_T1w.nii.gz"}`.
+
 ### Available stages
 
 `ANTsBiasFieldCorrection`, `ANTsBrainExtraction`, `ANTsDenoise`,
 `ANTsPreprocessBrainImage`, `ANTsRegistration`, `ANTsApplyTransforms`, `ANTsResample`,
 `ANTsResampleToTarget`, `Reorient`, `ClampIntensities`, `MinmaxNorm`, `ZTransformNorm`,
 `CenterCrop`, `CenterPad`, `CropToMask`, `CropToRange`, `PadToRange`, `CheckDimensions`,
-`CheckVoxelSpacing`, `ApplyMask`, `ToNumpy`, `Rename`, `Delete`.
+`CheckVoxelSpacing`, `ApplyMask`, `ToNumpy`, `GetImage`, `Rename`, `Delete`.
 
 ---
 
@@ -456,7 +463,7 @@ niiflow-preproc/
     │       ├── intensity_normalization.py  # Clamp / Minmax / ZTransform
     │       ├── croppad.py            # CenterCrop / CenterPad / Crop/Pad-to-range
     │       ├── qc.py                 # CheckDimensions / CheckVoxelSpacing
-    │       ├── utility.py            # ApplyMask / Reorient / ToNumpy / Rename / Delete
+    │       ├── utility.py            # ApplyMask / Reorient / ToNumpy / GetImage / Rename / Delete
     │       └── pipelines.py          # ANTsPreprocessBrainImage
     ├── workflows/
     │   ├── workflow.py               # ProcessingWorkflow / PlanningWorkflow (execution engine)

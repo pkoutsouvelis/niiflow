@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = [
     "ApplyMask",
     "Delete",
+    "GetImage",
     "Rename",
     "Reorient",
     "ToNumpy",
@@ -256,6 +257,57 @@ class Reorient(PipelineStage):
 
     def forward(self, **params: Any) -> dict[str, Any]:
         return {"out_image": ants_reorient(**params)}
+
+    def save_output(self, key: str, value: Any, output_path: Path) -> Path:
+        if key == "out_image":
+            if get_ext(output_path) not in (".nii.gz", ".nii"):
+                raise ValueError(
+                    f"Output path for {key!r} must end with .nii.gz or .nii, "
+                    f"got {output_path!s}"
+                )
+            return ants_image_write(value, output_path)
+        raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
+
+
+class GetImage(PipelineStage):
+    """Get an image and publish it to the pipeline context.
+
+    A thin stage that materialises ``image`` (loading it from disk when given a
+    path) and publishes it as ``out_image`` so downstream stages can consume it
+    via ``ctx.artifacts.<step>.out_image``. Saving follows naturally through the
+    standard persistence path: set ``save_options["out_image"]`` to a NIfTI path
+    to write it. Combined with the shared ``enable`` flag and a QC artifact (e.g.
+    ``"ctx.artifacts.qc.passed"``), this lets a pipeline persist only the images
+    that passed quality control into a separate output folder.
+
+    **Parameters** (``params``):
+
+    * ``image`` — :class:`ants.core.ANTsImage`, or a path read (and canonicalised
+      to RPI) via :func:`~niiflow.preproc.utils.file.ants_image_read`.
+
+    **Outputs** (from :meth:`forward`):
+
+    * ``out_image`` — the materialised image.
+
+    **Persistence** (``save_options``):
+
+    * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
+    """
+
+    REQUIRED_PARAMS = frozenset({"image"})
+
+    def load_param(self, key: str, value: Any) -> Any:
+        if key == "image":
+            if isinstance(value, ANTsImage):
+                return value
+            try:
+                return ants_image_read(value, reorient=True)
+            except Exception as e:
+                raise ValueError(f"Failed to read image from {value}") from e
+        return value
+
+    def forward(self, **params: Any) -> dict[str, Any]:
+        return {"out_image": params["image"]}
 
     def save_output(self, key: str, value: Any, output_path: Path) -> Path:
         if key == "out_image":
