@@ -3,8 +3,9 @@ def test_import_preproc() -> None:
 
     assert preproc.DynamicPreprocessingWorkflow is not None
     assert preproc.RunPlan is not None
-    assert preproc.create_pipeline is not None
-    assert preproc.load_preproc_config is not None
+    assert preproc.dynamic_pipeline is not None
+    assert preproc.dynamic_workflow is not None
+    assert preproc.load_config is not None
 
 
 def test_import_image_wrappers() -> None:

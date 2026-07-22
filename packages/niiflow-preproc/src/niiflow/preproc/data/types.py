@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal, Sequence, TypedDict, TypeAlias
-from nifti_finder.explorers import AllPurposeFileExplorer
+from nifti_finder.explorers import FileFinder
 
 
 class SimpleFilterConfig(TypedDict):
@@ -25,8 +25,9 @@ FilterConfig: TypeAlias = SimpleFilterConfig | ComposeFilterConfig
 
 
 class NiftiFinderConfig(TypedDict, total=False):
-    pattern: str | Sequence[str]
+    patterns: str | Sequence[str]
+    levels: dict[str, str | Sequence[str]] | None
     filters: FilterConfig | None
 
 
-DataExplorer: TypeAlias = AllPurposeFileExplorer
+DataExplorer: TypeAlias = FileFinder

@@ -28,6 +28,29 @@ def get_ext(path: Path | str) -> str:
     return full_ext
 
 
+NIFTI_EXTS = (".nii", ".nii.gz")
+JSON_EXTS = (".json",)
+YAML_EXTS = (".yaml", ".yml")
+TXT_EXTS = (".txt",)
+NPY_EXTS = (".npy",)
+
+
+def require_ext(path: Path | str, allowed: Sequence[str]) -> Path:
+    """Resolve ``path`` and ensure its extension is one of ``allowed``.
+
+    Extension matching uses :func:`get_ext`, so multi-part suffixes such as
+    ``.nii.gz`` are compared as a whole. Returns the resolved path.
+
+    Raises:
+        ValueError: If the resolved path's extension is not in ``allowed``.
+    """
+    resolved = resolve_path(path)
+    if get_ext(resolved) not in tuple(allowed):
+        expected = " or ".join(allowed)
+        raise ValueError(f"Output path must end with {expected}, got {resolved!s}")
+    return resolved
+
+
 def ants_image_read(path: Path | str, *, reorient: bool | str = True) -> ANTsImage:
     """Read an image from disk into an :class:`ants.core.ANTsImage`.
 
@@ -46,9 +69,10 @@ def ants_image_read(path: Path | str, *, reorient: bool | str = True) -> ANTsIma
 def ants_image_write(image: ANTsImage, path: Path | str) -> Path:
     """Write an :class:`ants.core.ANTsImage` to disk.
 
-    Parent directories are created when missing. Returns the resolved output path.
+    ``path`` must end with ``.nii`` or ``.nii.gz``. Parent directories are created when
+    missing. Returns the resolved output path.
     """
-    resolved = resolve_path(path)
+    resolved = require_ext(path, NIFTI_EXTS)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     try:
         image_write(image, str(resolved))
@@ -90,7 +114,7 @@ def write_npy(array: np.ndarray, path: Path | str) -> Path:
     """
     if not isinstance(array, np.ndarray):
         raise TypeError(f"`array` must be a numpy.ndarray, got {type(array).__name__}")
-    resolved = resolve_path(path)
+    resolved = require_ext(path, NPY_EXTS)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     np.save(str(resolved), array)
     return resolved
@@ -132,9 +156,10 @@ def write_json(data: Any, path: Path | str) -> Path:
     Mappings, sequences (including tuples), and scalars are supported. Paths are written
     as strings.
 
-    Parent directories are created when missing. Returns the resolved output path.
+    ``path`` must end with ``.json``. Parent directories are created when missing.
+    Returns the resolved output path.
     """
-    resolved = resolve_path(path)
+    resolved = require_ext(path, JSON_EXTS)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(
         json.dumps(json_safe(data), indent=2) + "\n",
@@ -158,12 +183,12 @@ def read_txt(path: Path | str) -> str:
 def write_txt(text: str, path: Path | str) -> Path:
     """Write ``text`` to a text file.
 
-    Parent directories are created when missing. Returns the resolved output path. A
-    single trailing newline is always written.
+    ``path`` must end with ``.txt``. Parent directories are created when missing.
+    Returns the resolved output path. A single trailing newline is always written.
     """
     if not isinstance(text, str):
         raise TypeError(f"`text` must be a str, got {type(text).__name__}")
-    resolved = resolve_path(path)
+    resolved = require_ext(path, TXT_EXTS)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(text.rstrip("\n") + "\n", encoding="utf-8")
     return resolved
@@ -193,11 +218,12 @@ def read_yaml(path: Path | str) -> dict[str, Any]:
 def write_yaml(data: dict[str, Any], path: Path | str) -> Path:
     """Write ``data`` to a YAML file.
 
-    Parent directories are created when missing. Returns the resolved output path.
+    ``path`` must end with ``.yaml`` or ``.yml``. Parent directories are created when
+    missing. Returns the resolved output path.
     """
     if not isinstance(data, dict):
         raise TypeError(f"`data` must be a dict, got {type(data).__name__}")
-    resolved = resolve_path(path)
+    resolved = require_ext(path, YAML_EXTS)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(
         yaml.safe_dump(data, sort_keys=False, default_flow_style=False),

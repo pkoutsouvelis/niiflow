@@ -1,15 +1,9 @@
 """Preprocessing pipeline products."""
 
-from .pipeline_factory import (
-    create_pipeline,
-    create_stage,
-    discover_stage_classes,
-)
+from .dynamic_pipeline import dynamic_pipeline
 from .pipeline_stages import Compose
 
 __all__ = [
-    "create_pipeline",
-    "create_stage",
-    "discover_stage_classes",
+    "dynamic_pipeline",
     "Compose",
 ]

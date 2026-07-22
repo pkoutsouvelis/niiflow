@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from nifti_finder.explorers import AllPurposeFileExplorer
+from nifti_finder.explorers import FileFinder
 
 from niiflow.preproc.data.explorer_factory import get_data_explorer
 
@@ -35,7 +35,7 @@ def dataset_root(tmp_path: Path) -> Path:
     return root
 
 
-def _list_files(explorer: AllPurposeFileExplorer, root: Path) -> list[str]:
+def _list_files(explorer: FileFinder, root: Path) -> list[str]:
     return sorted(path.name for path in explorer.list(root, sort=True, unique=True))
 
 
@@ -45,38 +45,57 @@ def _list_files(explorer: AllPurposeFileExplorer, root: Path) -> list[str]:
 
 
 class TestGetDataExplorerConstruction:
-    def test_returns_all_purpose_file_explorer(self) -> None:
-        explorer = get_data_explorer(pattern="*.nii*")
+    def test_returns_file_finder(self) -> None:
+        explorer = get_data_explorer(patterns="*.nii*")
 
-        assert isinstance(explorer, AllPurposeFileExplorer)
+        assert isinstance(explorer, FileFinder)
 
-    def test_none_pattern_defaults_to_glob_star(self, dataset_root: Path) -> None:
-        explorer = get_data_explorer(pattern=None)
-
-        names = _list_files(explorer, dataset_root)
-        assert "README.txt" in names
-        assert "sub-01_T1w.nii.gz" in names
-
-    def test_omitted_pattern_defaults_to_glob_star(self, dataset_root: Path) -> None:
+    def test_omitted_patterns_defaults_to_nifti_glob(self, dataset_root: Path) -> None:
         explorer = get_data_explorer()
 
         names = _list_files(explorer, dataset_root)
-        assert "README.txt" in names
+        assert "README.txt" not in names
+        assert "sub-01_T1w.nii.gz" in names
+
+    def test_levels_none_enables_flat_recursive_search(
+        self, dataset_root: Path
+    ) -> None:
+        explorer = get_data_explorer(patterns="*.nii*", levels=None)
+
+        assert "sub-01_T1w.nii.gz" in _list_files(explorer, dataset_root)
+
+    def test_levels_restricts_traversal(self, dataset_root: Path) -> None:
+        explorer = get_data_explorer(
+            patterns="*.nii*",
+            levels={"subjects": "sub-*", "anat": "anat"},
+        )
+
+        names = _list_files(explorer, dataset_root)
+        assert "sub-01_T1w.nii.gz" in names
+        assert names == sorted(names)
 
 
 # ---------------------------------------------------------------------------
-# Pattern validation
+# Argument validation
 # ---------------------------------------------------------------------------
 
 
-class TestPatternValidation:
-    def test_rejects_non_string_pattern(self) -> None:
-        with pytest.raises(ValueError, match="`pattern` must be a string or list"):
-            get_data_explorer(pattern=123)  # type: ignore[arg-type]
+class TestArgumentValidation:
+    def test_rejects_non_string_patterns(self) -> None:
+        with pytest.raises(ValueError, match="`patterns` must be a string or sequence"):
+            get_data_explorer(patterns=123)  # type: ignore[arg-type]
 
     def test_rejects_list_with_non_string_entries(self) -> None:
-        with pytest.raises(ValueError, match="list of strings"):
-            get_data_explorer(pattern=["*.nii*", 42])  # type: ignore[list-item]
+        with pytest.raises(ValueError, match="sequence of strings"):
+            get_data_explorer(patterns=["*.nii*", 42])  # type: ignore[list-item]
+
+    def test_rejects_empty_levels_mapping(self) -> None:
+        with pytest.raises(ValueError, match="must not be empty"):
+            get_data_explorer(levels={})
+
+    def test_rejects_non_mapping_levels(self) -> None:
+        with pytest.raises(ValueError, match="`levels` must be a dictionary or None"):
+            get_data_explorer(levels=["sub-*"])  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -85,10 +104,10 @@ class TestPatternValidation:
 
 
 class TestFileDiscovery:
-    def test_discovers_all_nifti_files_with_simple_pattern(
+    def test_discovers_all_nifti_files_with_simple_patterns(
         self, dataset_root: Path
     ) -> None:
-        explorer = get_data_explorer(pattern="*.nii*")
+        explorer = get_data_explorer(patterns="*.nii*")
 
         assert _list_files(explorer, dataset_root) == sorted(
             [
@@ -102,8 +121,8 @@ class TestFileDiscovery:
             ]
         )
 
-    def test_discovers_with_bids_like_pattern(self, dataset_root: Path) -> None:
-        explorer = get_data_explorer(pattern="sub-*/anat/*T1w.nii*")
+    def test_discovers_with_bids_like_patterns(self, dataset_root: Path) -> None:
+        explorer = get_data_explorer(patterns="sub-*/anat/*T1w.nii*")
 
         assert _list_files(explorer, dataset_root) == sorted(
             [
@@ -115,7 +134,7 @@ class TestFileDiscovery:
 
     def test_multiple_patterns_are_deduplicated(self, dataset_root: Path) -> None:
         explorer = get_data_explorer(
-            pattern=["*.nii*", "sub-*/anat/*T1w.nii*"],
+            patterns=["*.nii*", "sub-*/anat/*T1w.nii*"],
         )
 
         paths = explorer.list(dataset_root, sort=True, unique=True)
@@ -129,8 +148,8 @@ class TestFileDiscovery:
         self, dataset_root: Path
     ) -> None:
         explorer = get_data_explorer(
-            pattern="sub-*/anat/*T1w*.nii*",
-            filter_kwargs={
+            patterns="sub-*/anat/*T1w*.nii*",
+            filters={
                 "name": "ExcludeFileRegex",
                 "kwargs": {"regex": r".*_seg\.nii.*"},
             },
@@ -148,8 +167,8 @@ class TestFileDiscovery:
         self, dataset_root: Path
     ) -> None:
         explorer = get_data_explorer(
-            pattern="*.nii*",
-            filter_kwargs={
+            patterns="*.nii*",
+            filters={
                 "name": "ComposeFilter",
                 "kwargs": {
                     "filters": [
@@ -178,8 +197,8 @@ class TestFileDiscovery:
         self, dataset_root: Path
     ) -> None:
         explorer = get_data_explorer(
-            pattern="*.nii*",
-            filter_kwargs={
+            patterns="*.nii*",
+            filters={
                 "name": "ComposeFilter",
                 "kwargs": {
                     "filters": {
@@ -197,8 +216,8 @@ class TestFileDiscovery:
 
     def test_compose_filter_skips_none_entries(self, dataset_root: Path) -> None:
         explorer = get_data_explorer(
-            pattern="*.nii*",
-            filter_kwargs={
+            patterns="*.nii*",
+            filters={
                 "name": "ComposeFilter",
                 "kwargs": {
                     "filters": [
@@ -226,23 +245,23 @@ class TestFilterConfigValidation:
     def test_filter_entry_requires_name(self) -> None:
         with pytest.raises(ValueError, match="`name` key is required"):
             get_data_explorer(
-                filter_kwargs={"kwargs": {"regex": ".*"}},  # type: ignore[typeddict-item]
+                filters={"kwargs": {"regex": ".*"}},  # type: ignore[typeddict-item]
             )
 
     def test_filter_entry_requires_kwargs(self) -> None:
         with pytest.raises(ValueError, match="`kwargs` key is required"):
             get_data_explorer(
-                filter_kwargs={"name": "ExcludeFileRegex"},  # type: ignore[typeddict-item]
+                filters={"name": "ExcludeFileRegex"},  # type: ignore[typeddict-item]
             )
 
     def test_rejects_non_mapping_filter_config(self) -> None:
         with pytest.raises(ValueError, match="Invalid type for `filters`"):
-            get_data_explorer(filter_kwargs="not-a-dict")  # type: ignore[arg-type]
+            get_data_explorer(filters="not-a-dict")  # type: ignore[arg-type]
 
     def test_rejects_unknown_filter_class(self) -> None:
         with pytest.raises(ImportError, match="Filter 'NoSuchFilter' not found"):
             get_data_explorer(
-                filter_kwargs={"name": "NoSuchFilter", "kwargs": {}},
+                filters={"name": "NoSuchFilter", "kwargs": {}},
             )
 
     def test_rejects_invalid_compose_filter_inner_type(self) -> None:
@@ -250,7 +269,7 @@ class TestFilterConfigValidation:
             ValueError, match="Invalid type for `filters` in `ComposeFilter`"
         ):
             get_data_explorer(
-                filter_kwargs={
+                filters={
                     "name": "ComposeFilter",
                     "kwargs": {"filters": 123, "logic": "AND"},
                 },

@@ -27,7 +27,6 @@ from niiflow.preproc.utils.file import (
     ants_image_read,
     ants_image_write,
     delete_paths,
-    get_ext,
     resolve_path,
     write_json,
     write_npy,
@@ -208,11 +207,6 @@ class ApplyMask(PipelineStage):
 
     def save_output(self, key: str, value: Any, output_path: Path) -> Path:
         if key == "out_image":
-            if get_ext(output_path) not in (".nii.gz", ".nii"):
-                raise ValueError(
-                    f"Output path for {key!r} must end with .nii.gz or .nii, "
-                    f"got {output_path!s}"
-                )
             return ants_image_write(value, output_path)
         raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
 
@@ -260,11 +254,6 @@ class Reorient(PipelineStage):
 
     def save_output(self, key: str, value: Any, output_path: Path) -> Path:
         if key == "out_image":
-            if get_ext(output_path) not in (".nii.gz", ".nii"):
-                raise ValueError(
-                    f"Output path for {key!r} must end with .nii.gz or .nii, "
-                    f"got {output_path!s}"
-                )
             return ants_image_write(value, output_path)
         raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
 
@@ -311,11 +300,6 @@ class GetImage(PipelineStage):
 
     def save_output(self, key: str, value: Any, output_path: Path) -> Path:
         if key == "out_image":
-            if get_ext(output_path) not in (".nii.gz", ".nii"):
-                raise ValueError(
-                    f"Output path for {key!r} must end with .nii.gz or .nii, "
-                    f"got {output_path!s}"
-                )
             return ants_image_write(value, output_path)
         raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
 

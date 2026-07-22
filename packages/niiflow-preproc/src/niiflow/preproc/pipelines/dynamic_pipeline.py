@@ -3,22 +3,24 @@
 from __future__ import annotations
 
 __all__ = [
-    "create_pipeline",
-    "create_stage",
-    "discover_stage_classes",
+    "dynamic_pipeline",
 ]
 
 import inspect
 from typing import Any
 
 import niiflow.preproc.pipelines.pipeline_stages as pipeline_stages
-from niiflow.preproc.pipelines.pipeline_stages import Compose, PipelineStage
+from niiflow.preproc.pipelines.pipeline_stages import (
+    Compose,
+    PipelineStage,
+    RuntimeContext,
+)
 
 _VALID_PIPELINE_KEYS_LIST = frozenset({"steps", "verbose"})
-_VALID_PIPELINE_KEYS_MAPPING = frozenset({"order", "steps", "verbose"})
+_VALID_PIPELINE_KEYS_MAPPING = frozenset({"steps", "order", "verbose"})
 
 
-def discover_stage_classes() -> dict[str, type[PipelineStage]]:
+def _discover_stage_classes() -> dict[str, type[PipelineStage]]:
     """Return concrete :class:`PipelineStage` types keyed by class name.
 
     Scans :mod:`niiflow.preproc.pipelines.pipeline_stages` and excludes the abstract
@@ -52,7 +54,7 @@ def _resolve_stage_class(
         ) from exc
 
 
-def create_stage(
+def _create_stage(
     step_label: str,
     step_spec: Any,
     *,
@@ -167,8 +169,13 @@ def _normalize_pipeline(
     )
 
 
-def create_pipeline(pipeline: dict[str, Any]) -> Compose:
-    """Instantiate a :class:`Compose` pipeline from a pipeline specification.
+def dynamic_pipeline(pipeline_spec: dict[str, Any], run_id: str | None = None) -> None:
+    """Build and immediately execute a pipeline for one active file.
+
+    Unlike the previous :func:`create_pipeline` factory (which returned a reusable
+    :class:`Compose` object), this is an **executable forward function**: it
+    instantiates stages, runs them under a fresh :class:`RuntimeContext`, and
+    returns ``None``.
 
     The specification must contain ``steps``, either as:
 
@@ -191,29 +198,30 @@ def create_pipeline(pipeline: dict[str, Any]) -> Compose:
     :class:`Compose` directly when assembling stages in Python.
 
     Args:
-        pipeline: Stage execution specification (``steps``, optional ``order``).
-
-    Returns:
-        A :class:`Compose` instance ready to :meth:`~PipelineStage.run`.
+        pipeline_spec: Specification of pipeline stages and parameters
+            (``steps``, optional ``order`` / ``verbose``).
+        run_id: A run id to pass to the pipeline's runtime context (default ``None``).
     """
-    pipeline_verbose = pipeline.get("verbose", True)
+    pipeline_verbose = pipeline_spec.get("verbose", True)
     if not isinstance(pipeline_verbose, bool):
         raise TypeError(
             f"Pipeline-level `verbose` must be a boolean, got "
             f"{type(pipeline_verbose).__name__}."
         )
 
-    entries, step_ids = _normalize_pipeline(pipeline)
-    registry = discover_stage_classes()
+    steps, step_ids = _normalize_pipeline(pipeline_spec)
+    registry = _discover_stage_classes()
 
     built = [
-        create_stage(
+        _create_stage(
             step_label,
             step_spec,
             registry=registry,
             default_verbose=pipeline_verbose,
         )
-        for step_label, step_spec in entries
+        for step_label, step_spec in steps
     ]
 
-    return Compose(built, step_ids=step_ids, verbose=pipeline_verbose)
+    pipeline = Compose(built, step_ids=step_ids, verbose=pipeline_verbose)
+    ctx = RuntimeContext(run_id=run_id)
+    pipeline.run(ctx)

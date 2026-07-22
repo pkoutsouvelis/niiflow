@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 __all__ = [
-    "PlanningWorkflow",
+    "PlannableWorkflow",
     "ProcessingWorkflow",
 ]
 
@@ -22,6 +22,8 @@ from concurrent.futures import (
 )
 import traceback
 from multiprocessing.managers import DictProxy
+
+from tqdm.auto import tqdm
 
 from niiflow.preproc.staging import StagedEntry
 from .logging_manager import LoggingManager, ParallelLogging
@@ -206,11 +208,14 @@ class ProcessingWorkflow(ABC):
             self.log("No runnable entries to process")
             return
 
-        with self._logging_manager.setup_parallel_logging() as parallel:
+        with (
+            self._logging_manager.setup_parallel_logging() as parallel,
+            self._progress_bar(len(runnable)) as progress,
+        ):
             if self._num_workers <= 1:
-                self._run_serial(runnable)
+                self._run_serial(runnable, progress)
             else:
-                self._run_parallel(runnable, parallel)
+                self._run_parallel(runnable, parallel, progress)
 
         self.log("Workflow complete")
 
@@ -231,6 +236,27 @@ class ProcessingWorkflow(ABC):
         This provides a compact shorthand for the class-specific default run interface.
         """
         return self.run(*args, **kwargs)
+
+    def _progress_bar(self, total: int) -> Any:
+        """Return a context manager yielding a progress bar (or ``None``).
+
+        The bar auto-disables when stderr is not an interactive terminal
+        (``disable=None``), so batch/CI runs and captured test output stay clean while
+        interactive runs get a live bar that coexists with the loggers.
+        """
+        return tqdm(
+            total=total,
+            desc="Processing entries",
+            unit="entry",
+            disable=None,
+            leave=True,
+        )
+
+    @staticmethod
+    def _advance(progress: Any) -> None:
+        """Advance ``progress`` by one entry when a progress bar is active."""
+        if progress is not None:
+            progress.update(1)
 
     @staticmethod
     def _partition_entries(
@@ -274,7 +300,7 @@ class ProcessingWorkflow(ABC):
             tb = traceback.format_exc().strip().replace("\n", "\n  ")
             self._status_entry(entry, "FAILURE", detail=tb)
 
-    def _run_serial(self, entries: list[StagedEntry]) -> None:
+    def _run_serial(self, entries: list[StagedEntry], progress: Any = None) -> None:
         if self._timeout is None:
             for entry in entries:
                 try:
@@ -283,6 +309,8 @@ class ProcessingWorkflow(ABC):
                 except Exception:
                     tb = traceback.format_exc().strip().replace("\n", "\n  ")
                     self._status_entry(entry, "FAILURE", detail=tb)
+                finally:
+                    self._advance(progress)
             return
 
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -301,9 +329,14 @@ class ProcessingWorkflow(ABC):
                 except Exception:
                     tb = traceback.format_exc().strip().replace("\n", "\n  ")
                     self._status_entry(entry, "FAILURE", detail=tb)
+                finally:
+                    self._advance(progress)
 
     def _run_parallel(
-        self, entries: list[StagedEntry], parallel: ParallelLogging
+        self,
+        entries: list[StagedEntry],
+        parallel: ParallelLogging,
+        progress: Any = None,
     ) -> None:
         manager = multiprocessing.Manager() if self._timeout is not None else None
         try:
@@ -321,6 +354,7 @@ class ProcessingWorkflow(ABC):
                 if self._timeout is None:
                     for fut in as_completed(futures):
                         self._status_future(fut, futures[fut])
+                        self._advance(progress)
                     return
 
                 handled: set[Future[float]] = set()
@@ -342,6 +376,7 @@ class ProcessingWorkflow(ABC):
                             continue
                         self._status_future(fut, remaining[fut])
                         handled.add(fut)
+                        self._advance(progress)
 
                     now = time.monotonic()
                     for fut in not_done:
@@ -352,23 +387,21 @@ class ProcessingWorkflow(ABC):
                         if started is not None and now - started > self._timeout:
                             self._status_entry(entry, "TIMEOUT")
                             handled.add(fut)
+                            self._advance(progress)
         finally:
             if manager is not None:
                 manager.shutdown()
 
 
-class PlanningWorkflow(ProcessingWorkflow):
+class PlannableWorkflow(ProcessingWorkflow):
     """Base for workflows that support planning before execution.
 
-    Planning workflows discover or assemble inputs, resolve per-entry parameters, and
+    Plannable workflows discover or assemble inputs, resolve per-entry parameters, and
     produce a :class:`~niiflow.preproc.workflows.plan.RunPlan`.
 
     Subclasses implement :meth:`plan` with workflow-specific inputs. Use
     :meth:`run_plan` to execute a saved or freshly built plan. Use :meth:`run_entries`
     only when executing already staged entries directly.
-
-    For planning workflows, :meth:`run` is the default user-facing execution method and
-    is equivalent to :meth:`run_plan`.
     """
 
     @abstractmethod
@@ -393,13 +426,3 @@ class PlanningWorkflow(ProcessingWorkflow):
         if not isinstance(plan, RunPlan):
             raise TypeError(f"`plan` must be a RunPlan, got {type(plan).__name__}")
         self.run_entries(plan.entries)
-
-    def run(self, plan: RunPlan) -> None:
-        """Run the default workflow action.
-
-        For planning workflows, this is equivalent to :meth:`run_plan`.
-
-        Args:
-            plan: Run plan to execute.
-        """
-        self.run_plan(plan)

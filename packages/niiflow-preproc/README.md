@@ -45,10 +45,11 @@ uv run niiflow-preproc --help
 
 ---
 
-## 1. Dynamic pipeline construction
+## 1. Dynamic pipeline execution
 
-A pipeline is a dictionary with a `steps` entry, built by
-`create_pipeline()` into a `Compose` of `PipelineStage` objects. `steps` may be either:
+A pipeline is a dictionary with a `steps` entry. Pass it to
+`dynamic_pipeline()`, which builds a `Compose` of `PipelineStage` objects and
+runs it immediately under a fresh `RuntimeContext`. `steps` may be either:
 
 - an **ordered list** of step specs (position defines order), or
 - an **id-keyed mapping** with an optional top-level `order` (used here so steps can
@@ -67,10 +68,9 @@ single QC step (`CheckVoxelSpacing`) runs first, and its boolean `passed` output
 gated steps are skipped:
 
 ```python
-from niiflow.preproc.pipelines import create_pipeline
-from niiflow.preproc.pipelines.pipeline_stages import RuntimeContext
+from niiflow.preproc.pipelines import dynamic_pipeline
 
-pipeline = create_pipeline(
+dynamic_pipeline(
     {
         "verbose": True,
         "steps": {
@@ -109,11 +109,9 @@ pipeline = create_pipeline(
             },
         },
         "order": ["qc", "n4", "strip"],
-    }
+    },
+    run_id="sub-01",
 )
-
-ctx = RuntimeContext(run_id="sub-01")
-pipeline.run(ctx)
 ```
 
 How the `enable` gate works: `enable` is resolved first (including `ctx.` references)
@@ -142,43 +140,48 @@ quality control, e.g. `params={"image": "ctx.artifacts.strip.out_image", "enable
 
 ## 2. Dynamic exploration of active files
 
-When you point a workflow at a **directory**, an explorer discovers the *active files*
-(the canonical anchor per processing unit, e.g. each subject's T1w). The explorer is
-configured with a glob `pattern` and optional composable `filters`, backed by
+When a workflow `plan` input uses **`mode: search`**, an explorer discovers the
+*active files* (the canonical anchor per processing unit, e.g. each subject's T1w).
+The explorer lives under that search input's `explorer_params`: glob `patterns` and
+optional composable `filters`, backed by
 `[nifti-finder](https://pypi.org/project/nifti-finder/)`.
 
 The example below discovers **only healthy T1w images that also have a FLAIR companion**
 in a BIDS dataset, combining two filters with `AND` logic:
 
 ```yaml
-explorer_params:
-  pattern: "**/anat/*T1w.nii*"
-  filters:
-    name: ComposeFilter
-    kwargs:
-      logic: AND
-      filters:
-        - name: IncludeFromTable
-          kwargs:
-            table_path: /root/of/BIDS/dataset/participants.tsv
-            id_column: dataset_subject_session
-            criteria_column: group
-            criteria_value: Control
-            id_pattern: "{id}"
-        - name: IncludeIfFileExists
-          kwargs:
-            filename_pattern: "*FLAIR.nii*"
+inputs:
+  mode: search
+  roots: /root/of/BIDS/dataset
+  explorer_params:
+    patterns: "**/anat/*T1w.nii*"
+    filters:
+      name: ComposeFilter
+      kwargs:
+        logic: AND
+        filters:
+          - name: IncludeFromTable
+            kwargs:
+              table_path: /root/of/BIDS/dataset/participants.tsv
+              id_column: dataset_subject_session
+              criteria_column: group
+              criteria_value: Control
+              id_pattern: "{id}"
+          - name: IncludeIfFileExists
+            kwargs:
+              filename_pattern: "*FLAIR.nii*"
 ```
 
-- `pattern` accepts a single glob or a list of globs.
+- `patterns` accepts a single glob or a list of globs.
 - `filters` is either a single `{name, kwargs}` filter or a `ComposeFilter` whose
 `kwargs.filters` is a list combined with `logic: AND`/`OR`.
 - For **resuming** interrupted cohort runs, nifti-finder also provides
 `IncludeFromLogs` / `ExcludeFromLogs` filters that read a workflow `status.log`
 (see [nifti-finder](https://github.com/pkoutsouvelis/nifti-finder)).
 
-Explicit file inputs bypass discovery entirely and are processed directly; only
-directory inputs are searched, so you can freely mix the two.
+Other `inputs` shapes: an explicit file path (string/`Path`), `mode: from_file`
+(path list on disk), or a sequence mixing any of these. Explicit paths bypass
+discovery; only `search` roots are explored.
 
 ---
 
@@ -302,29 +305,44 @@ staging_params:
 structured logging and process-based parallelism.
 
 ```python
-from niiflow.preproc.workflows import DynamicPreprocessingWorkflow
+from niiflow.preproc.workflows import DynamicPreprocessingWorkflow, dynamic_workflow
 
 workflow = DynamicPreprocessingWorkflow(
-    pipeline_params={...},        # the `steps` spec from section 1/3
-    explorer_params={...},        # the explorer from section 2 (optional)
+    pipeline_params={...},        # the `steps` spec from section 1/3 (required)
     staging_params={...},         # the stager from section 3 (optional)
-    num_workers=1,                  # serial by default; "auto" or N>1 for parallel cohort runs
+    num_workers=1,                # serial by default; "auto" or N>1 for parallel cohort runs
     logs_root="/data/logs",       # writes main.log, status.log, workers.log
     timeout=1800,                 # soft per-entry limit (seconds)
 )
 
 # Phase 1 — plan only (discover active files + stage entries, no processing):
-plan = workflow.plan(["/data/bids", "/data/extra/sub-99_T1w.nii.gz"])
+plan = workflow.plan(
+    [
+        {
+            "mode": "search",
+            "roots": "/data/bids",
+            "explorer_params": {"patterns": "**/anat/*T1w.nii*"},
+        },
+        "/data/extra/sub-99_T1w.nii.gz",
+    ]
+)
 plan.save("/data/plans/run.duckdb")   # persist for reuse
 
 # Phase 2 — execute the prepared plan:
 workflow.run_plan(plan)
+
+# Or one-shot orchestration (plan / plan-only / from-plan / dry-run):
+dynamic_workflow(
+    settings={"pipeline_params": {...}, "staging_params": {...}, "num_workers": 1},
+    inputs="/data/extra/sub-99_T1w.nii.gz",
+)
 ```
 
-- **Planning** (`plan`) discovers active files (explorer for directories, explicit paths
-used as-is), stages per-entry parameters, and returns a `RunPlan` of `StagedEntry`
-objects. `run_inputs(files)` does plan + execute in one call; `run(target)` accepts
-either file inputs or an existing `RunPlan`.
+- **Planning** (`plan`) discovers active files from `InputData` (`search` /
+`from_file` / explicit paths), stages per-entry parameters, and returns a `RunPlan`
+of `StagedEntry` objects. To plan and execute, call `plan` then `run_plan`, or use
+`dynamic_workflow(...)` for a single orchestration entry point (plan /
+plan-only / from-plan / dry-run). The CLI `dynamic_workflow` command uses that driver.
 - **Logging** is controlled by `logs_root` and the `main_logs` / `status_logs` /
 `worker_logs` / `dev_mode` flags. The status log records one line per entry
 (`<active> | SUCCESS`, `... | FAILURE | <traceback>`, `... | TIMEOUT`, or
@@ -333,7 +351,7 @@ either file inputs or an existing `RunPlan`.
 `"auto"` (CPU count) or an integer `> 1` to run entries in a `ProcessPoolExecutor`.
 For parallel cohort runs, also consider limiting per-process ITK/OMP threads to
 avoid oversubscription. `timeout` is a soft per-entry limit reported in the status log.
-- `**RunPlan` persistence**: `.duckdb` (recommended, scalable) or `.json` (debug).
+- **RunPlan persistence**: `.duckdb` (recommended, scalable) or `.json` (debug).
 Reload with `RunPlan.load(path)` and execute without re-discovering or re-staging.
 
 ### Continuing from existing runs
@@ -343,20 +361,24 @@ overwrite derivative outputs. To **continue** after a partial or failed run, nar
 which actives are discovered or which entries pass staging:
 
 **1. Filter actives with `status.log` (explorer)**  
-Add an `IncludeFromLogs` or `ExcludeFromLogs` filter under `explorer_params.filters`,
-pointing at the workflow `status.log` from a previous run. Typical patterns: exclude
-actives that already logged `SUCCESS`, or include only `FAILURE` / `TIMEOUT` lines for
-a retry pass. Filter kwargs are documented in
+Add an `IncludeFromLogs` or `ExcludeFromLogs` filter under
+`inputs.explorer_params.filters` (for a `mode: search` input), pointing at the
+workflow `status.log` from a previous run. Typical patterns: exclude actives that
+already logged `SUCCESS`, or include only `FAILURE` / `TIMEOUT` lines for a retry
+pass. Filter kwargs are documented in
 [nifti-finder](https://github.com/pkoutsouvelis/nifti-finder).
 
 ```yaml
-explorer_params:
-  pattern: "**/anat/*T1w.nii*"
-  filters:
-    name: ExcludeFromLogs
-    kwargs:
-      log_path: /data/logs/status.log
-      # see nifti-finder for status / path-matching options
+inputs:
+  mode: search
+  roots: /root/of/BIDS/dataset
+  explorer_params:
+    patterns: "**/anat/*T1w.nii*"
+    filters:
+      name: ExcludeFromLogs
+      kwargs:
+        log_path: /data/logs/status.log
+        # see nifti-finder for status / path-matching options
 ```
 
 **2. Skip entries whose staged outputs already exist (FileStager)**  
@@ -377,7 +399,8 @@ staging_params:
 ```
 
 **3. Re-execute a saved plan**  
-`execute-plan` (or `workflow.run_plan(RunPlan.load(...))`) reloads a saved plan without
+Set `from_plan` in a `dynamic_workflow` config (or call
+`workflow.run_plan(RunPlan.load(...))`) to reload a saved plan without
 re-discovery or re-staging. Pair this with `status.log` filters when you need a fresh
 plan that omits already-finished actives.
 
@@ -389,38 +412,43 @@ plan that omits already-finished actives.
 
 ## 5. CLI: end-to-end orchestration
 
-A single config file declares the `workflow` (with its explorer, staging, and pipeline
-kwargs), the `run_inputs` to process, and optional `artifacts.plan_path`.
+The CLI is a thin registry: each subcommand name is an orchestration driver, and the
+config file is that driver's keyword arguments. Today the registered command is
+`dynamic_workflow`.
 
 An end-to-end example — BIDS T1w discovery (controls with FLAIR companions), QC-gated
 skull-stripping, and staged derivative paths — lives at
 `[configs/bids_controls_t1w_flair.yaml](configs/bids_controls_t1w_flair.yaml)`.
 Replace placeholder paths (`/root/of/BIDS/...`, `/data/...`) before running.
 
-Commands (configs may be `.yaml`, `.yml`, or `.json`):
-
 ```bash
-# Build a plan from run_inputs and execute it (optionally saving the plan first):
-niiflow-preproc execute configs/bids_controls_t1w_flair.yaml --save-plan /data/plans/controls.duckdb
-
-# Plan only: discover + stage, save a plan, do NOT execute:
-niiflow-preproc plan    configs/bids_controls_t1w_flair.yaml -o /data/plans/controls.duckdb
-
-# Dry run: print the resolved plan without saving or executing:
-niiflow-preproc plan    configs/bids_controls_t1w_flair.yaml --dry-run
-niiflow-preproc execute configs/bids_controls_t1w_flair.yaml --dry-run
-niiflow-preproc execute-plan configs/bids_controls_t1w_flair.yaml /data/plans/controls.duckdb --dry-run
-
-# Execute a previously saved plan — no re-discovery, no re-staging (fast reuse):
-niiflow-preproc execute-plan configs/bids_controls_t1w_flair.yaml /data/plans/controls.duckdb
+# Plan from inputs and execute (config may include save_plan_to):
+niiflow-preproc dynamic_workflow configs/bids_controls_t1w_flair.yaml
 
 # Show full tracebacks on error:
-niiflow-preproc --debug execute configs/bids_controls_t1w_flair.yaml
+niiflow-preproc --debug dynamic_workflow configs/bids_controls_t1w_flair.yaml
+
+# List registered commands:
+niiflow-preproc --help
 ```
 
-Plan output paths default to `artifacts.plan_path` when `--save-plan`/`-o` is omitted.
-Use `.duckdb` for production-scale plans you intend to reload, and `.json` for quick
-inspection.
+Modes belong in the YAML (not CLI flags), for example:
+
+```yaml
+# plan only (discover + stage, save, do not execute)
+plan_only: true
+save_plan_to: /data/plans/controls.duckdb
+
+# dry run (print plan; do not save or execute)
+dry_run: true
+
+# execute a previously saved plan (no re-discovery / re-staging)
+from_plan: /data/plans/controls.duckdb
+# omit inputs / save_plan_to when using from_plan
+```
+
+Configs may be `.yaml`, `.yml`, or `.json`. Use `.duckdb` for production-scale plans
+you intend to reload, and `.json` for quick inspection.
 
 ---
 
@@ -434,13 +462,13 @@ niiflow-preproc/
 ├── tests/
 └── src/niiflow/preproc/
     ├── cli/
-    │   ├── main.py                   # argparse entry point (execute / plan / execute-plan)
-    │   └── commands.py               # command action implementations
+    │   ├── main.py                   # argparse entry (registered commands + config path)
+    │   └── commands.py               # COMMANDS registry / run()
     ├── config/
-    │   ├── load.py                   # load_preproc_config (YAML/JSON)
-    │   └── types.py                  # PreprocConfig / WorkflowConfig schemas
+    │   └── load.py                   # load_config (YAML/JSON → dict)
     ├── data/
     │   ├── explorer_factory.py       # get_data_explorer (nifti-finder + filters)
+    │   ├── read_from_file.py         # read_paths_from_file
     │   └── types.py
     ├── staging/
     │   ├── stager.py                 # Stager base, StagedEntry, make_entries
@@ -451,7 +479,7 @@ niiflow-preproc/
     │   ├── validation.py
     │   └── types.py                  # Root/Input/Output spec types
     ├── pipelines/
-    │   ├── pipeline_factory.py       # create_pipeline / create_stage / discovery
+    │   ├── dynamic_pipeline.py       # dynamic_pipeline (build + execute)
     │   └── pipeline_stages/
     │       ├── pipeline_stage.py     # PipelineStage base + RuntimeContext
     │       ├── compose.py            # Compose (ordered stage runner)
@@ -466,10 +494,11 @@ niiflow-preproc/
     │       ├── utility.py            # ApplyMask / Reorient / ToNumpy / GetImage / Rename / Delete
     │       └── pipelines.py          # ANTsPreprocessBrainImage
     ├── workflows/
-    │   ├── workflow.py               # ProcessingWorkflow / PlanningWorkflow (execution engine)
-    │   ├── dynamic_workflow.py       # DynamicPreprocessingWorkflow
+    │   ├── workflow.py               # ProcessingWorkflow / PlannableWorkflow (execution engine)
+    │   ├── dynamic_workflow.py       # DynamicPreprocessingWorkflow / dynamic_workflow
     │   ├── workflow_factory.py       # create_workflow / discovery
     │   ├── mixins.py                 # SupportsFileDiscovery / SupportsStaging
+    │   ├── types.py                  # InputData / SearchInput / FromFileInput
     │   ├── plan.py                   # RunPlan (.duckdb / .json persistence)
     │   ├── logging_manager.py        # main / status / parallel logging
     │   └── logging_utils.py

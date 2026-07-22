@@ -13,7 +13,7 @@ from ants.core import ANTsImage
 
 from niiflow.preproc.functional.image.bias_field import ants_bias_field_correction
 from niiflow.preproc.pipelines.pipeline_stages.pipeline_stage import PipelineStage
-from niiflow.preproc.utils.file import ants_image_read, ants_image_write, get_ext
+from niiflow.preproc.utils.file import ants_image_read, ants_image_write
 
 
 class ANTsBiasFieldCorrection(PipelineStage):
@@ -78,9 +78,5 @@ class ANTsBiasFieldCorrection(PipelineStage):
         ``.nii.gz``; returns the resolved image path.
         """
         if key == "out_image":
-            if get_ext(output_path) not in (".nii.gz", ".nii"):
-                raise ValueError(
-                    f"Output path for {key!r} must end with .nii.gz or .nii, got {output_path!s}"
-                )
             return ants_image_write(value, output_path)
         raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")

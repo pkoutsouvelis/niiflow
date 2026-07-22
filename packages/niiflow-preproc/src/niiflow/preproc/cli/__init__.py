@@ -1,11 +1,11 @@
 """Command-line interface for niiflow-preproc."""
 
 __all__ = [
+    "COMMANDS",
     "build_parser",
-    "execute",
-    "execute_plan",
-    "plan",
+    "main",
+    "run",
 ]
 
-from .main import build_parser
-from .commands import execute, execute_plan, plan
+from .commands import COMMANDS, run
+from .main import build_parser, main

@@ -174,7 +174,7 @@ class TestRunPlanWorkflowIntegration:
         plan.save(plan_path)
 
         restored = RunPlan.load(plan_path)
-        wf.run(restored)
+        wf.run_plan(restored)
 
         assert called == [active.resolve()]
         assert restored.entries[0].params["output_path"] == str(output.resolve())

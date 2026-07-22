@@ -17,7 +17,7 @@ from niiflow.preproc.functional.image.resampling import (
     ants_resample_to_target,
 )
 from niiflow.preproc.pipelines.pipeline_stages.pipeline_stage import PipelineStage
-from niiflow.preproc.utils.file import ants_image_read, ants_image_write, get_ext
+from niiflow.preproc.utils.file import ants_image_read, ants_image_write
 
 
 class ANTsResample(PipelineStage):
@@ -64,11 +64,6 @@ class ANTsResample(PipelineStage):
         ``.nii.gz``; returns the resolved image path.
         """
         if key == "out_image":
-            if get_ext(output_path) not in (".nii.gz", ".nii"):
-                raise ValueError(
-                    f"Output path for {key!r} must end with .nii.gz or .nii, "
-                    f"got {output_path!s}"
-                )
             return ants_image_write(value, output_path)
         raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
 
@@ -130,10 +125,5 @@ class ANTsResampleToTarget(PipelineStage):
         ``.nii.gz``; returns the resolved image path.
         """
         if key == "out_image":
-            if get_ext(output_path) not in (".nii.gz", ".nii"):
-                raise ValueError(
-                    f"Output path for {key!r} must end with .nii.gz or .nii, "
-                    f"got {output_path!s}"
-                )
             return ants_image_write(value, output_path)
         raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")

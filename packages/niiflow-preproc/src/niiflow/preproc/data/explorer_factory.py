@@ -9,7 +9,7 @@ __all__ = [
 import importlib
 from typing import Any, Sequence, cast
 
-from nifti_finder.explorers import AllPurposeFileExplorer
+from nifti_finder.explorers import FileFinder
 from nifti_finder.filters import Filter
 
 from .types import FilterConfig, ComposeFilterKwargs, DataExplorer
@@ -73,28 +73,85 @@ def _build_filter(filters: FilterConfig | None) -> Filter | None:
     return _get_filter_obj(**name_and_kwargs)
 
 
+def _validate_patterns(patterns: str | Sequence[str]) -> str | list[str]:
+    if isinstance(patterns, str):
+        return patterns
+    if isinstance(patterns, Sequence) and not isinstance(patterns, (bytes, bytearray)):
+        items = list(patterns)
+        if not items:
+            raise ValueError("`patterns` must be a non-empty string or sequence")
+        if any(not isinstance(item, str) for item in items):
+            raise ValueError("`patterns` must be a string or sequence of strings")
+        return items
+    raise ValueError(
+        f"`patterns` must be a string or sequence of strings, got "
+        f"{type(patterns).__name__}"
+    )
+
+
+def _validate_levels(
+    levels: dict[str, str | Sequence[str]] | None,
+) -> dict[str, str | list[str]] | None:
+    """Validate ``levels``; ``None`` means flat recursive search (FileFinder
+    default)."""
+    if levels is None:
+        return None
+    if not isinstance(levels, dict):
+        raise ValueError(
+            f"`levels` must be a dictionary or None, got {type(levels).__name__}"
+        )
+    if not levels:
+        raise ValueError(
+            "`levels` must not be empty; omit `levels` (or pass None) for flat "
+            "recursive search"
+        )
+
+    normalized: dict[str, str | list[str]] = {}
+    for key, value in levels.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError(f"`levels` keys must be non-empty strings, got {key!r}")
+        if isinstance(value, str):
+            normalized[key] = value
+            continue
+        if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+            items = list(value)
+            if not items or any(not isinstance(item, str) for item in items):
+                raise ValueError(
+                    f"`levels[{key!r}]` must be a string or non-empty sequence of strings"
+                )
+            normalized[key] = items
+            continue
+        raise ValueError(
+            f"`levels[{key!r}]` must be a string or sequence of strings, got "
+            f"{type(value).__name__}"
+        )
+    return normalized
+
+
 def get_data_explorer(
-    pattern: str | Sequence[str] | None = None,
-    filter_kwargs: FilterConfig | None = None,
+    patterns: str | Sequence[str] = "*.nii*",
+    levels: dict[str, str | Sequence[str]] | None = None,
+    filters: FilterConfig | None = None,
 ) -> DataExplorer:
-    """Instantiate nifti-finder's `AllPurposeFileExplorer` with user-provided settings.
+    """Instantiate nifti-finder's :class:`~nifti_finder.explorers.FileFinder`.
 
     Args:
-        pattern: A string or list of strings representing the pattern to match.
-        filter_kwargs: A dictionary of keyword arguments to pass to the filter.
+        patterns: Glob pattern or list of patterns (default ``\"*.nii*\"``).
+        levels: Optional named directory-traversal levels. ``None`` (default)
+            enables flat recursive search. An empty mapping is rejected.
+        filters: Optional filter config mapping (``{name, kwargs}``). A list of
+            filters is not accepted here; combine filters via ``ComposeFilter``
+            and its own ``logic`` kwarg.
 
     Returns:
-        An `AllPurposeFileExplorer` instance.
+        A :class:`~nifti_finder.explorers.FileFinder` instance.
     """
-    pattern = pattern or "*"
-    flt = _build_filter(filter_kwargs) if filter_kwargs else None
-    if not isinstance(pattern, (str, list)):
-        raise ValueError(
-            f"`pattern` must be a string or list of strings, got {type(pattern).__name__}"
-        )
-    if isinstance(pattern, list) and any(not isinstance(p, str) for p in pattern):
-        raise ValueError(
-            f"`pattern` must be a list of strings, got {type(pattern).__name__}"
-        )
+    validated_patterns = _validate_patterns(patterns)
+    validated_levels = _validate_levels(levels)
+    built_filters = _build_filter(filters) if filters is not None else None
 
-    return AllPurposeFileExplorer(pattern, filters=flt)
+    return FileFinder(
+        patterns=validated_patterns,
+        levels=validated_levels,
+        filters=built_filters,
+    )

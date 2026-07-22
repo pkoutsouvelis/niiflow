@@ -13,7 +13,7 @@ from ants.core import ANTsImage
 
 from niiflow.preproc.functional.image.skull_stripping import ants_brain_extraction
 from niiflow.preproc.pipelines.pipeline_stages.pipeline_stage import PipelineStage
-from niiflow.preproc.utils.file import ants_image_read, ants_image_write, get_ext
+from niiflow.preproc.utils.file import ants_image_read, ants_image_write
 
 
 class ANTsBrainExtraction(PipelineStage):
@@ -62,12 +62,6 @@ class ANTsBrainExtraction(PipelineStage):
         Both keys require ``output_path`` to end with ``.nii`` or ``.nii.gz``. Returns
         the resolved image path.
         """
-        if get_ext(output_path) not in (".nii.gz", ".nii"):
-            raise ValueError(
-                f"Output path for {key!r} must end with .nii.gz or .nii, got {output_path!s}"
-            )
-        if key == "out_image":
-            return ants_image_write(value, output_path)
-        if key == "brain_mask":
+        if key in ("out_image", "brain_mask"):
             return ants_image_write(value, output_path)
         raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")

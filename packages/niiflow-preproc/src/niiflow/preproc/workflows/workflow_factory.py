@@ -11,7 +11,7 @@ import importlib
 import inspect
 from typing import Any
 
-from .workflow import PlanningWorkflow, ProcessingWorkflow
+from .workflow import PlannableWorkflow, ProcessingWorkflow
 
 _WORKFLOW_MODULES: tuple[str, ...] = ("niiflow.preproc.workflows.dynamic_workflow",)
 
@@ -22,7 +22,7 @@ def discover_workflow_classes() -> dict[str, type[ProcessingWorkflow]]:
     for module_name in _WORKFLOW_MODULES:
         module = importlib.import_module(module_name)
         for name, obj in inspect.getmembers(module, inspect.isclass):
-            if obj in (ProcessingWorkflow, PlanningWorkflow):
+            if obj in (ProcessingWorkflow, PlannableWorkflow):
                 continue
             if inspect.isabstract(obj):
                 continue

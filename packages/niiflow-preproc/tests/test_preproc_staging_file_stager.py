@@ -408,7 +408,7 @@ class TestSearchInputs:
             {
                 "mask": {
                     "root": {"mode": "active"},
-                    "search": {"pattern": "*.nii.gz"},
+                    "search": {"patterns": "*.nii.gz"},
                     "resolve_results": "first",
                 }
             },
@@ -432,7 +432,7 @@ class TestSearchInputs:
             [bids_tree["active"]],
             {
                 "mask": {
-                    "search": {"pattern": "*.nii.gz"},
+                    "search": {"patterns": "*.nii.gz"},
                     "resolve_results": "all",
                 }
             },
@@ -455,7 +455,7 @@ class TestSearchInputs:
             [bids_tree["active"]],
             {
                 "mask": {
-                    "search": {"pattern": "*.nii.gz"},
+                    "search": {"patterns": "*.nii.gz"},
                     "resolve_results": "single",
                 }
             },
@@ -485,7 +485,7 @@ class TestSearchInputs:
             [bids_tree["active"]],
             {
                 "mask": {
-                    "search": {"pattern": "*.nii.gz"},
+                    "search": {"patterns": "*.nii.gz"},
                     "resolve_results": "single",
                 }
             },
@@ -517,7 +517,7 @@ class TestSearchInputs:
                             "value": root_b,
                         },
                     ],
-                    "search": {"pattern": "*.nii.gz"},
+                    "search": {"patterns": "*.nii.gz"},
                     "resolve_results": "all",
                 }
             },
@@ -538,7 +538,7 @@ class TestSearchInputs:
             {
                 "mask": {
                     "root": {"mode": "path", "value": missing_root},
-                    "search": {"pattern": "*.nii.gz"},
+                    "search": {"patterns": "*.nii.gz"},
                 }
             },
         )[0]
@@ -565,7 +565,7 @@ class TestSearchInputs:
         )
 
         stager = FileStager({"mask": "input"})
-        search = {"pattern": "*.nii.gz"}
+        search = {"patterns": "*.nii.gz"}
         ctx = StageContext(active=bids_tree["active"])
         spec = {"root": {"mode": "active"}, "search": search}
 
@@ -873,7 +873,7 @@ class TestBatchStaging:
             {
                 "mask": {
                     "root": {"mode": "active"},
-                    "search": {"pattern": "*.nii.gz"},
+                    "search": {"patterns": "*.nii.gz"},
                 }
             },
         )[0]
@@ -932,7 +932,7 @@ class TestSpecValidation:
 
         with pytest.raises(ValueError, match="unsupported key"):
             stager.get_input_file(
-                {"search": {"pattern": "*.nii.gz"}, "extra": True},
+                {"search": {"patterns": "*.nii.gz"}, "extra": True},
                 ctx=ctx,
             )
 

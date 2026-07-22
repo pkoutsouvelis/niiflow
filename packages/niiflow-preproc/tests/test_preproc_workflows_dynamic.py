@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import time
 from pathlib import Path
@@ -9,14 +10,18 @@ from typing import Any
 
 import pytest
 
-from niiflow.preproc.pipelines import discover_stage_classes
 from niiflow.preproc.pipelines.pipeline_stages import PipelineStage
 from niiflow.preproc.staging import StagedEntry, StagingErrorRecord
 from niiflow.preproc.workflows import (
     DynamicPreprocessingWorkflow,
-    PlanningWorkflow,
+    PlannableWorkflow,
     ProcessingWorkflow,
     RunPlan,
+    dynamic_workflow,
+)
+
+_dynamic_pipeline_mod = importlib.import_module(
+    "niiflow.preproc.pipelines.dynamic_pipeline"
 )
 
 
@@ -39,10 +44,13 @@ class EchoStage(PipelineStage):
 def registry_with_echo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> dict[str, type[PipelineStage]]:
-    registry = discover_stage_classes()
-    registry = {**registry, "EchoStage": EchoStage}
+    registry = {
+        **_dynamic_pipeline_mod._discover_stage_classes(),
+        "EchoStage": EchoStage,
+    }
     monkeypatch.setattr(
-        "niiflow.preproc.pipelines.pipeline_factory.discover_stage_classes",
+        _dynamic_pipeline_mod,
+        "_discover_stage_classes",
         lambda: registry,
     )
     return registry
@@ -52,16 +60,26 @@ def _workflow(
     *,
     staging_params: dict[str, Any] | None = None,
     pipeline_params: dict[str, Any] | None = None,
-    explorer_params: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> DynamicPreprocessingWorkflow:
     return DynamicPreprocessingWorkflow(
         staging_params=staging_params
         or {"stager_name": "FileStager", "params": {"pointers": {}}},
         pipeline_params=pipeline_params or {"steps": []},
-        explorer_params=explorer_params,
         **kwargs,
     )
+
+
+def _search(
+    roots: Path | str | list[Path | str],
+    *,
+    explorer_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "mode": "search",
+        "roots": roots,
+        "explorer_params": explorer_params or {"patterns": "*.nii*"},
+    }
 
 
 def _proc_noop(entry: StagedEntry) -> None:
@@ -149,17 +167,19 @@ def logs_dir(tmp_path: Path) -> Path:
 
 
 class TestWorkflowPlanningContract:
-    def test_dynamic_workflow_is_planning_workflow(self) -> None:
-        assert issubclass(DynamicPreprocessingWorkflow, PlanningWorkflow)
-        assert issubclass(PlanningWorkflow, ProcessingWorkflow)
+    def test_dynamic_workflow_is_plannable_workflow(self) -> None:
+        assert issubclass(DynamicPreprocessingWorkflow, PlannableWorkflow)
+        assert issubclass(PlannableWorkflow, ProcessingWorkflow)
 
     def test_processing_workflow_does_not_define_plan(self) -> None:
         assert "plan" not in ProcessingWorkflow.__dict__
 
-    def test_planning_workflow_run_rejects_non_plan(self, tmp_path: Path) -> None:
+    def test_run_rejects_non_staged_entry(self, tmp_path: Path) -> None:
         wf = _workflow()
-        with pytest.raises(TypeError, match="`plan` must be a RunPlan"):
-            PlanningWorkflow.run(wf, [])  # type: ignore[arg-type]
+        with pytest.raises(
+            TypeError, match="`entries` must contain only `StagedEntry`"
+        ):
+            wf.run([tmp_path / "a.nii.gz"])  # type: ignore[arg-type]
 
 
 class TestDynamicWorkflowPlan:
@@ -186,8 +206,8 @@ class TestDynamicWorkflowPlan:
         ]
 
     def test_plan_from_explorer_config(self, dataset_root: Path) -> None:
-        wf = _workflow(explorer_params={"pattern": "*.nii*"})
-        plan = wf.plan(dataset_root)
+        wf = _workflow()
+        plan = wf.plan(_search(dataset_root))
 
         names = sorted(entry.active.name for entry in plan.entries)
         assert names == sorted(
@@ -203,28 +223,80 @@ class TestDynamicWorkflowPlan:
         )
 
     def test_plan_with_filter_excludes_segmentations(self, dataset_root: Path) -> None:
-        wf = _workflow(
-            explorer_params={
-                "pattern": "sub-*/anat/*T1w*.nii*",
-                "filters": {
-                    "name": "ExcludeFileRegex",
-                    "kwargs": {"regex": r".*_seg\.nii.*"},
+        wf = _workflow()
+        plan = wf.plan(
+            _search(
+                dataset_root,
+                explorer_params={
+                    "patterns": "sub-*/anat/*T1w*.nii*",
+                    "filters": {
+                        "name": "ExcludeFileRegex",
+                        "kwargs": {"regex": r".*_seg\.nii.*"},
+                    },
                 },
-            }
+            )
         )
-        plan = wf.plan(dataset_root)
 
         names = sorted(entry.active.name for entry in plan.entries)
         assert names == sorted(
             ["sub-01_T1w.nii.gz", "sub-02_T1w.nii.gz", "sub-03_T1w.nii.gz"]
         )
 
-    def test_plan_rejects_directory_without_explorer(self, dataset_root: Path) -> None:
+    def test_plan_rejects_directory_as_explicit_path(self, dataset_root: Path) -> None:
         wf = _workflow()
-        with pytest.raises(
-            ValueError, match="Directory run inputs require a configured data explorer"
-        ):
+        with pytest.raises(ValueError, match="Explicit run input must be a file"):
             wf.plan(dataset_root)
+
+    def test_plan_from_file_list(self, tmp_path: Path) -> None:
+        files = [tmp_path / f"img-{index}.nii.gz" for index in range(3)]
+        for file_path in files:
+            file_path.write_bytes(b"")
+        list_path = tmp_path / "actives.txt"
+        list_path.write_text(
+            "\n".join(str(path.resolve()) for path in files),
+            encoding="utf-8",
+        )
+        wf = _workflow()
+
+        plan = wf.plan({"mode": "from_file", "path": list_path})
+
+        assert [entry.active for entry in plan.entries] == [
+            path.resolve() for path in files
+        ]
+
+    def test_plan_save_active_files(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "a.nii.gz"
+        file_path.write_bytes(b"")
+        out = tmp_path / "found.txt"
+        wf = _workflow()
+
+        found = wf.discover_active_files(file_path, save_to=out)
+
+        assert found == [file_path.resolve()]
+        assert out.read_text(encoding="utf-8") == f"{file_path.resolve()}\n"
+
+    def test_plan_save_plan(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "a.nii.gz"
+        file_path.write_bytes(b"")
+        plan_path = tmp_path / "job.duckdb"
+        files_path = tmp_path / "found.txt"
+        wf = _workflow()
+
+        plan = wf.plan(file_path, save_filepaths_to=files_path, save_plan_to=plan_path)
+
+        assert plan_path.exists()
+        assert RunPlan.load(plan_path).entries == plan.entries
+        assert files_path.read_text(encoding="utf-8") == f"{file_path.resolve()}\n"
+
+    def test_plan_with_none_entry_params(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "a.nii.gz"
+        file_path.write_bytes(b"")
+        wf = DynamicPreprocessingWorkflow(pipeline_params=None, num_workers=1)
+
+        plan = wf.plan(file_path)
+
+        assert len(plan.entries) == 1
+        assert plan.entries[0].params == {}
 
     def test_plan_stages_file_pointers(self, tmp_path: Path) -> None:
         active = tmp_path / "input.nii.gz"
@@ -278,19 +350,19 @@ class TestDynamicWorkflowRun:
         sentinels = tmp_path / "sentinels"
         wf = _workflow(
             pipeline_params={"steps": [], "out_dir": str(sentinels)},
-            explorer_params={"pattern": "*.nii*"},
         )
         monkeypatch.setattr(wf, "process_single", _proc_touch_sentinel)
 
-        wf.run(dataset_root)
+        wf.run_plan(wf.plan(_search(dataset_root)))
 
         produced = {path.name for path in sentinels.iterdir()}
         expected = {
-            f"{entry.active.name}.done" for entry in wf.plan(dataset_root).entries
+            f"{entry.active.name}.done"
+            for entry in wf.plan(_search(dataset_root)).entries
         }
         assert produced == expected
 
-    def test_run_inputs_returns_generated_plan(
+    def test_plan_then_run_plan_executes_entries(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -298,29 +370,37 @@ class TestDynamicWorkflowRun:
         file_path = tmp_path / "a.nii.gz"
         file_path.write_bytes(b"")
         wf = _workflow(num_workers=1)
-        monkeypatch.setattr(wf, "process_single", _proc_noop)
+        called: list[StagedEntry] = []
 
-        result = wf.run_inputs(file_path)
+        def _record(entry: StagedEntry) -> None:
+            called.append(entry)
 
-        assert isinstance(result, RunPlan)
-        assert len(result.entries) == 1
-        assert result.entries[0].active == file_path.resolve()
-        assert result.entries[0].params == {"steps": []}
+        monkeypatch.setattr(wf, "process_single", _record)
 
-    def test_run_inputs_matches_plan(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
+        wf.run_plan(wf.plan(file_path))
+
+        assert len(called) == 1
+        assert called[0].active == file_path.resolve()
+        assert called[0].params == {"steps": []}
+
+    def test_plan_save_options_apply_before_run_plan(self, tmp_path: Path) -> None:
         file_path = tmp_path / "a.nii.gz"
         file_path.write_bytes(b"")
+        plan_path = tmp_path / "job.duckdb"
+        files_path = tmp_path / "found.txt"
         wf = _workflow(num_workers=1)
-        monkeypatch.setattr(wf, "process_single", _proc_noop)
 
-        plan = wf.plan(file_path)
-        result = wf.run_inputs(file_path)
+        wf.run_plan(
+            wf.plan(
+                file_path,
+                save_filepaths_to=files_path,
+                save_plan_to=plan_path,
+            )
+        )
 
-        assert result.entries == plan.entries
+        assert plan_path.exists()
+        assert len(RunPlan.load(plan_path).entries) == 1
+        assert files_path.read_text(encoding="utf-8") == f"{file_path.resolve()}\n"
 
     def test_call_dunder_delegates_to_run(
         self,
@@ -334,13 +414,16 @@ class TestDynamicWorkflowRun:
         wf = _workflow(pipeline_params={"steps": [], "out_dir": str(sentinels)})
         monkeypatch.setattr(wf, "process_single", _proc_touch_sentinel)
 
-        wf(files)
+        plan = wf.plan(files)
+        wf(plan.entries)
 
         assert {path.name for path in sentinels.iterdir()} == {
             f"{file_path.name}.done" for file_path in files
         }
 
-    def test_run_with_empty_plan_is_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_run_plan_with_empty_plan_is_noop(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         wf = _workflow()
         called: list[StagedEntry] = []
 
@@ -348,7 +431,7 @@ class TestDynamicWorkflowRun:
             called.append(entry)
 
         monkeypatch.setattr(wf, "process_single", _record)
-        wf.run(RunPlan(entries=()))
+        wf.run_plan(RunPlan(entries=()))
 
         assert called == []
 
@@ -361,11 +444,10 @@ class TestDynamicWorkflowRun:
         sentinels = tmp_path / "sentinels"
         wf = _workflow(
             pipeline_params={"steps": [], "out_dir": str(sentinels)},
-            explorer_params={"pattern": "*.nii*"},
             num_workers=1,
         )
         monkeypatch.setattr(wf, "process_single", _proc_fail_on_sub02_t1w)
-        wf.run(dataset_root)
+        wf.run_plan(wf.plan(_search(dataset_root)))
 
         produced = {path.name for path in sentinels.iterdir()}
         assert "sub-02_T1w.nii.gz.done" not in produced
@@ -382,16 +464,16 @@ class TestDynamicWorkflowRun:
         sentinels = tmp_path / "sentinels"
         wf = _workflow(
             pipeline_params={"steps": [], "out_dir": str(sentinels)},
-            explorer_params={"pattern": "*.nii*"},
             num_workers=num_workers,
         )
         monkeypatch.setattr(wf, "process_single", _proc_touch_sentinel)
 
-        wf.run(dataset_root)
+        wf.run_plan(wf.plan(_search(dataset_root)))
 
         produced = {path.name for path in sentinels.iterdir()}
         expected = {
-            f"{entry.active.name}.done" for entry in wf.plan(dataset_root).entries
+            f"{entry.active.name}.done"
+            for entry in wf.plan(_search(dataset_root)).entries
         }
         assert produced == expected
 
@@ -419,7 +501,7 @@ class TestDynamicWorkflowRun:
         )
         monkeypatch.setattr(wf, "process_single", _proc_sleep_if_active)
 
-        wf.run([fast, slow])
+        wf.run_plan(wf.plan([fast, slow]))
 
         status = (logs_dir / "status.log").read_text(encoding="utf-8")
         assert f"{fast.resolve()} | SUCCESS" in status
@@ -453,7 +535,7 @@ class TestDynamicWorkflowRun:
         )
         monkeypatch.setattr(wf, "process_single", _proc_sleep_if_active)
 
-        wf.run([first, second])
+        wf.run_plan(wf.plan([first, second]))
 
         status = (logs_dir / "status.log").read_text(encoding="utf-8")
         assert f"{first.resolve()} | TIMEOUT" in status
@@ -490,7 +572,7 @@ class TestDynamicWorkflowRun:
         )
         monkeypatch.setattr(wf, "process_single", _proc_sleep)
 
-        wf.run(entry)
+        wf.run_plan(wf.plan(entry))
 
         status = (logs_dir / "status.log").read_text(encoding="utf-8")
         assert f"{entry.resolve()} | SUCCESS" in status
@@ -522,7 +604,7 @@ class TestDynamicWorkflowRun:
         )
         monkeypatch.setattr(wf, "process_single", _proc_sleep)
 
-        wf.run(entry)
+        wf.run_plan(wf.plan(entry))
 
         status = (logs_dir / "status.log").read_text(encoding="utf-8")
         assert f"{entry.resolve()} | TIMEOUT" in status
@@ -587,7 +669,7 @@ class TestDynamicWorkflowRun:
         wf = _workflow(logs_root=logs_dir, num_workers=1)
         monkeypatch.setattr(wf, "process_single", _proc_noop)
 
-        wf.run(file_path)
+        wf.run_plan(wf.plan(file_path))
 
         assert (logs_dir / "main.log").exists()
         assert (logs_dir / "status.log").exists()
@@ -603,13 +685,12 @@ class TestDynamicWorkflowRun:
     ) -> None:
         wf = _workflow(
             pipeline_params={"steps": [], "log_lines": 6},
-            explorer_params={"pattern": "*.nii*"},
             num_workers=4,
             logs_root=logs_dir,
         )
         monkeypatch.setattr(wf, "process_single", _proc_log_burst)
 
-        wf.run(dataset_root)
+        wf.run_plan(wf.plan(_search(dataset_root)))
 
         status_lines = [
             line
@@ -666,3 +747,192 @@ class TestDynamicWorkflowPipeline:
         wf.process_single(plan.entries[0])
 
         assert output.read_text(encoding="utf-8") == "hello"
+
+
+def _driver_settings(
+    *,
+    pipeline_params: dict[str, Any] | None = None,
+    staging_params: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    return {
+        "staging_params": staging_params
+        or {"stager_name": "FileStager", "params": {"pointers": {}}},
+        "pipeline_params": pipeline_params or {"steps": []},
+        "num_workers": 1,
+        **kwargs,
+    }
+
+
+class TestDynamicWorkflow:
+    def test_plan_and_execute(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        file_path = tmp_path / "a.nii.gz"
+        file_path.write_bytes(b"")
+        called: list[StagedEntry] = []
+
+        def _record(entry: StagedEntry) -> None:
+            called.append(entry)
+
+        monkeypatch.setattr(
+            DynamicPreprocessingWorkflow,
+            "process_single",
+            staticmethod(_record),
+        )
+
+        plan = dynamic_workflow(
+            settings=_driver_settings(),
+            inputs=file_path,
+        )
+
+        assert len(plan.entries) == 1
+        assert plan.entries[0].active == file_path.resolve()
+        assert called == [plan.entries[0]]
+
+    def test_plan_only_saves_without_executing(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        file_path = tmp_path / "a.nii.gz"
+        file_path.write_bytes(b"")
+        plan_path = tmp_path / "job.duckdb"
+        files_path = tmp_path / "found.txt"
+        called: list[StagedEntry] = []
+
+        monkeypatch.setattr(
+            DynamicPreprocessingWorkflow,
+            "process_single",
+            staticmethod(lambda entry: called.append(entry)),
+        )
+
+        plan = dynamic_workflow(
+            settings=_driver_settings(),
+            inputs=file_path,
+            save_filepaths_to=files_path,
+            save_plan_to=plan_path,
+            plan_only=True,
+        )
+
+        assert plan_path.exists()
+        assert RunPlan.load(plan_path).entries == plan.entries
+        assert files_path.read_text(encoding="utf-8") == f"{file_path.resolve()}\n"
+        assert called == []
+
+    def test_dry_run_prints_and_skips_save_and_execute(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        file_path = tmp_path / "a.nii.gz"
+        file_path.write_bytes(b"")
+        plan_path = tmp_path / "job.duckdb"
+        called: list[StagedEntry] = []
+
+        monkeypatch.setattr(
+            DynamicPreprocessingWorkflow,
+            "process_single",
+            staticmethod(lambda entry: called.append(entry)),
+        )
+
+        plan = dynamic_workflow(
+            settings=_driver_settings(),
+            inputs=file_path,
+            save_plan_to=plan_path,
+            dry_run=True,
+        )
+
+        captured = capsys.readouterr()
+        assert "RunPlan:" in captured.out
+        assert str(file_path.resolve()) in captured.out
+        assert not plan_path.exists()
+        assert called == []
+        assert len(plan.entries) == 1
+
+    def test_from_plan_executes_saved_plan(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        file_path = tmp_path / "a.nii.gz"
+        file_path.write_bytes(b"")
+        plan_path = tmp_path / "job.duckdb"
+        plan = _workflow().plan(file_path, save_plan_to=plan_path)
+        called: list[StagedEntry] = []
+
+        monkeypatch.setattr(
+            DynamicPreprocessingWorkflow,
+            "process_single",
+            staticmethod(lambda entry: called.append(entry)),
+        )
+
+        loaded = dynamic_workflow(
+            settings=_driver_settings(),
+            from_plan=plan_path,
+        )
+
+        assert loaded.entries == plan.entries
+        assert called == [plan.entries[0]]
+
+    def test_from_plan_ignores_inputs_and_pipeline_params(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        file_path = tmp_path / "a.nii.gz"
+        file_path.write_bytes(b"")
+        plan_path = tmp_path / "job.duckdb"
+        plan = _workflow().plan(file_path, save_plan_to=plan_path)
+        called: list[StagedEntry] = []
+
+        monkeypatch.setattr(
+            DynamicPreprocessingWorkflow,
+            "process_single",
+            staticmethod(lambda entry: called.append(entry)),
+        )
+
+        loaded = dynamic_workflow(
+            settings=_driver_settings(),
+            inputs=tmp_path / "ignored.nii.gz",
+            from_plan=plan_path,
+        )
+
+        err = capsys.readouterr().err
+        assert loaded.entries == plan.entries
+        assert called == [plan.entries[0]]
+        assert "Ignoring `inputs`" in err
+        assert "Ignoring `pipeline_params`" in err
+
+    def test_requires_inputs_without_from_plan(self) -> None:
+        with pytest.raises(ValueError, match="`inputs` is required"):
+            dynamic_workflow(settings=_driver_settings())
+
+    def test_requires_settings_without_from_plan(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="`settings` is required"):
+            dynamic_workflow(inputs=tmp_path / "a.nii.gz")
+
+    def test_requires_pipeline_params_without_from_plan(self, tmp_path: Path) -> None:
+        settings = _driver_settings()
+        del settings["pipeline_params"]
+        with pytest.raises(ValueError, match="non-None `pipeline_params`"):
+            dynamic_workflow(settings=settings, inputs=tmp_path / "a.nii.gz")
+
+        settings = _driver_settings()
+        settings["pipeline_params"] = None
+        with pytest.raises(ValueError, match="non-None `pipeline_params`"):
+            dynamic_workflow(settings=settings, inputs=tmp_path / "a.nii.gz")
+
+    def test_rejects_unknown_settings(self) -> None:
+        with pytest.raises(
+            TypeError,
+            match="Failed to instantiate workflow 'DynamicPreprocessingWorkflow'",
+        ):
+            dynamic_workflow(
+                settings={**_driver_settings(), "not_a_real_kwarg": True},
+                inputs="/tmp/a.nii.gz",
+            )

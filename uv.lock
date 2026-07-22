@@ -2774,14 +2774,14 @@ wheels = [
 
 [[package]]
 name = "nifti-finder"
-version = "1.2.0"
+version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/05/f4/0889e60d841884a73c9cf9654f4daf01e50a5bdb97decd9db0d714fd1bcf/nifti_finder-1.2.0.tar.gz", hash = "sha256:fae0f011de8042ea0c72de0853fdbbf0e45a35f8a5b045e65136dbbedf9a4cf8", size = 22529, upload-time = "2026-05-12T12:21:55.366Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/10/d858176210b3993c35cd773fbcde2d9c27e12aafb0112993b11063ba050b/nifti_finder-2.0.0.tar.gz", hash = "sha256:98d3e4375fd28e50cc557be90141fcfaf424dcdf33a0d8ea5e882a21a1edccd1", size = 23691, upload-time = "2026-07-15T07:24:46.609Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e5/54/dd07f33e8df83bb011ce00c0c32a6a107d665fd37bb5c7a922473c3a4611/nifti_finder-1.2.0-py3-none-any.whl", hash = "sha256:9374afd6a7091f8b449082016f368d794c0d83ffe827d59d4ed07a8f65a477db", size = 25069, upload-time = "2026-05-12T12:21:54.224Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/fe/7b0b1ed20871028d1328101b821f02d14acfd846202f6eed8acfede76b26/nifti_finder-2.0.0-py3-none-any.whl", hash = "sha256:207ffb65f698d571ee5ac8646365543fb7faf2db4ad174bfb179e5530238fb13", size = 26118, upload-time = "2026-07-15T07:24:45.656Z" },
 ]
 
 [[package]]
@@ -2831,7 +2831,7 @@ requires-dist = [
     { name = "lightning", specifier = ">=2.5.5,<3.0.0" },
     { name = "matplotlib", specifier = ">=3.10.7,<4.0.0" },
     { name = "monai", specifier = ">=1.5.0,<2.0.0" },
-    { name = "nifti-finder", specifier = ">=1.1.0,<2.0.0" },
+    { name = "nifti-finder", specifier = ">=2.0.0,<3.0.0" },
     { name = "numpy", specifier = ">=2.3.5,<3.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0" },
     { name = "pyyaml", specifier = ">=6.0.2,<7.0.0" },
@@ -2852,6 +2852,7 @@ dependencies = [
     { name = "nifti-finder" },
     { name = "numpy" },
     { name = "pyyaml" },
+    { name = "tqdm" },
 ]
 
 [package.optional-dependencies]
@@ -2865,10 +2866,11 @@ requires-dist = [
     { name = "antspyx", specifier = ">=0.6.1,<0.7.0" },
     { name = "duckdb", specifier = ">=1.1.0,<2.0.0" },
     { name = "nibabel", specifier = ">=5.0.0,<6.0.0" },
-    { name = "nifti-finder", specifier = ">=1.2.0,<2.0.0" },
+    { name = "nifti-finder", specifier = ">=2.0.0,<3.0.0" },
     { name = "numpy", specifier = ">=2.3.5,<3.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0" },
     { name = "pyyaml", specifier = ">=6.0.2,<7.0.0" },
+    { name = "tqdm", specifier = ">=4.66.0,<5.0.0" },
 ]
 provides-extras = ["test"]
 

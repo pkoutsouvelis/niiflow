@@ -15,7 +15,7 @@ from typing import Any
 from ants.core import ANTsImage
 
 from niiflow.preproc.pipelines.pipeline_stages.pipeline_stage import PipelineStage
-from niiflow.preproc.utils.file import ants_image_read, get_ext, write_json, write_txt
+from niiflow.preproc.utils.file import ants_image_read, write_json, write_txt
 
 _COMPARE_OPS = {
     ">": operator.gt,
@@ -149,22 +149,10 @@ class CheckVoxelSpacing(PipelineStage):
 
     def save_output(self, key: str, value: Any, output_path: Path) -> Path:
         if key == "passed":
-            if get_ext(output_path) != ".txt":
-                raise ValueError(
-                    f"Output path for {key!r} must end with .txt, got {output_path!s}"
-                )
             return write_txt(str(value), output_path)
         if key == "value":
-            if get_ext(output_path) != ".txt":
-                raise ValueError(
-                    f"Output path for {key!r} must end with .txt, got {output_path!s}"
-                )
             return write_txt(",".join(str(item) for item in value), output_path)
         if key == "report":
-            if get_ext(output_path) != ".json":
-                raise ValueError(
-                    f"Output path for {key!r} must end with .json, got {output_path!s}"
-                )
             return write_json(value, output_path)
         raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
 
@@ -273,21 +261,9 @@ class CheckDimensions(PipelineStage):
 
     def save_output(self, key: str, value: Any, output_path: Path) -> Path:
         if key == "passed":
-            if get_ext(output_path) != ".txt":
-                raise ValueError(
-                    f"Output path for {key!r} must end with .txt, got {output_path!s}"
-                )
             return write_txt(str(value), output_path)
         if key == "value":
-            if get_ext(output_path) != ".txt":
-                raise ValueError(
-                    f"Output path for {key!r} must end with .txt, got {output_path!s}"
-                )
             return write_txt(",".join(str(item) for item in value), output_path)
         if key == "report":
-            if get_ext(output_path) != ".json":
-                raise ValueError(
-                    f"Output path for {key!r} must end with .json, got {output_path!s}"
-                )
             return write_json(value, output_path)
         raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")

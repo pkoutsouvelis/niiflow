@@ -11,7 +11,7 @@ license = "MIT"
 readme = "README.md"
 authors = [{ name = "Petros Koutsouvelis" }]
 dependencies = [
-    "nifti-finder>=1.1.0,<2.0.0",
+    "nifti-finder>=2.0.0,<3.0.0",
     "lightning>=2.5.5,<3.0.0",
     "monai>=1.5.0,<2.0.0",
     "numpy>=2.3.5,<3.0.0",

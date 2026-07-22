@@ -265,11 +265,6 @@ class ANTsRegistration(PipelineStage):
         :func:`_save_transformlist` (``.json`` manifest plus copied transforms).
         """
         if key == "out_image":
-            if get_ext(output_path) not in (".nii.gz", ".nii"):
-                raise ValueError(
-                    f"Output path for {key!r} must end with .nii.gz or .nii, "
-                    f"got {output_path!s}"
-                )
             return ants_image_write(value, output_path)
 
         if key in ("fwdtransforms", "invtransforms"):
@@ -370,11 +365,4 @@ class ANTsApplyTransforms(PipelineStage):
         if key != "out_image":
             raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}.")
 
-        if get_ext(output_path) not in (".nii.gz", ".nii"):
-            raise ValueError(
-                f"Output path for {key!r} must end with .nii.gz or .nii, "
-                f"got {output_path!s}."
-            )
-
-        ants_image_write(value, output_path)
-        return output_path
+        return ants_image_write(value, output_path)

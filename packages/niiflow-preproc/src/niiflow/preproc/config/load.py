@@ -1,27 +1,28 @@
-"""Config loading utilities for preprocessing."""
+"""Config loading utilities for preprocessing CLI commands."""
 
 from __future__ import annotations
 
 __all__ = [
-    "load_preproc_config",
+    "load_config",
 ]
 
 from pathlib import Path
-from typing import cast
+from typing import Any
 
 from niiflow.preproc.utils.file import read_json, read_yaml, resolve_path
 
-from .types import PreprocConfig
 
+def load_config(path: Path | str) -> dict[str, Any]:
+    """Load a JSON or YAML config file as a top-level mapping.
 
-def load_preproc_config(path: Path | str) -> PreprocConfig:
-    """Load a preprocessing config from JSON or YAML.
+    The returned dict is intended to be passed as keyword arguments to a
+    registered CLI command (e.g. :func:`~niiflow.preproc.workflows.dynamic_workflow`).
 
     Args:
         path: Path to a ``.json``, ``.yaml``, or ``.yml`` config file.
 
     Returns:
-        Loaded preprocessing config.
+        Loaded config mapping.
 
     Raises:
         FileNotFoundError: If ``path`` does not exist.
@@ -51,4 +52,4 @@ def load_preproc_config(path: Path | str) -> PreprocConfig:
             f"{type(data).__name__}"
         )
 
-    return cast(PreprocConfig, data)
+    return data

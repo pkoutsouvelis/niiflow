@@ -4,25 +4,26 @@ from __future__ import annotations
 
 __all__ = [
     "DynamicPreprocessingWorkflow",
+    "dynamic_workflow",
 ]
 
 from typing import Any, Literal, cast
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from niiflow.preproc.staging import StagedEntry
-from niiflow.preproc.pipelines import create_pipeline
-from niiflow.preproc.pipelines.pipeline_stages import RuntimeContext
+from niiflow.preproc.pipelines import dynamic_pipeline
 
 from .mixins import SupportsFileDiscovery, SupportsStaging, InputData
 from .plan import RunPlan
-from .workflow import PlanningWorkflow
+from .workflow import PlannableWorkflow
+from .workflow_factory import create_workflow
 
 
 class DynamicPreprocessingWorkflow(
     SupportsFileDiscovery,
     SupportsStaging,
-    PlanningWorkflow,
+    PlannableWorkflow,
 ):
     """File-driven preprocessing workflow with dynamic pipeline execution.
 
@@ -38,25 +39,28 @@ class DynamicPreprocessingWorkflow(
     ``pipeline_params`` define the preprocessing pipeline to run, including the
     stage order, stage parameters, and any file-linked fields that should be
     resolved during staging. In the current implementation, this dictionary is
-    copied to every entry before stagers resolve per-entry values.
+    copied to every entry before stagers resolve per-entry values. Pass ``None``
+    only when the instance will solely :meth:`run_plan` a previously staged plan
+    (entry params then come from the plan).
+
+    Active-file discovery is driven by :data:`~niiflow.preproc.workflows.types.InputData`
+    passed to :meth:`plan`: an explicit file path, a ``search`` or ``from_file``
+    mapping, or a sequence of those.
 
     The explicit API is:
 
     - :meth:`plan`: discover active files and build a staged run plan.
     - :meth:`run_plan`: execute an existing run plan.
-    - :meth:`run_inputs`: build and execute a run plan from file inputs.
-    - :meth:`run`: convenience method accepting either file inputs or a run plan.
+    - :meth:`run`: execute staged entries (from :class:`~niiflow.preproc.workflows.workflow.ProcessingWorkflow`).
+
+    For a single entry point that instantiates the workflow and selects
+    plan / execute / from-plan modes, use :func:`dynamic_workflow`.
 
     Args:
         pipeline_params: Pipeline specification copied into entry parameters before
-            staging. In the current implementation, this usually contains ``steps``
-            plus any file-linked fields resolved by stagers. Semantically, it defines
-            the preprocessing pipeline; future implementations may keep it as an
-            invariant workflow-level pipeline object instead of copying it into each
-            entry.
-        explorer_params: Optional data explorer configuration used to discover
-            active files. When omitted, files are expected to be provided
-            explicitly.
+            staging. Usually contains ``steps`` plus any file-linked fields resolved
+            by stagers. Required as an explicit argument; use ``None`` only for
+            execute-from-plan usage where staging is not performed.
         staging_params: Optional stager specifications passed to
             :func:`~niiflow.preproc.staging.create_stager`. When omitted, entries
             are built from ``pipeline_params`` without running stagers.
@@ -73,8 +77,7 @@ class DynamicPreprocessingWorkflow(
     def __init__(
         self,
         *,
-        pipeline_params: dict[str, Any],
-        explorer_params: dict[str, Any] | None = None,
+        pipeline_params: dict[str, Any] | None,
         staging_params: dict[str, Any] | Sequence[dict[str, Any]] | None = None,
         num_workers: int | Literal["auto"] = 1,
         logs_root: Path | str | None = None,
@@ -84,7 +87,7 @@ class DynamicPreprocessingWorkflow(
         dev_mode: bool = False,
         timeout: float | None = None,
     ) -> None:
-        PlanningWorkflow.__init__(
+        PlannableWorkflow.__init__(
             self,
             num_workers=num_workers,
             logs_root=logs_root,
@@ -94,26 +97,26 @@ class DynamicPreprocessingWorkflow(
             dev_mode=dev_mode,
             timeout=timeout,
         )
+        if pipeline_params is not None and not isinstance(pipeline_params, dict):
+            raise TypeError("`pipeline_params` must be a dictionary or None")
+        self.configure_staging(
+            staging_params=staging_params, entry_params=pipeline_params
+        )
 
-        self.configure_explorer(explorer_params)
-        self.configure_staging(staging_params)
-
-        if not isinstance(pipeline_params, dict):
-            raise TypeError("`pipeline_params` must be a dictionary")
-        self.configure_entry_params(pipeline_params)
-
-    @property
-    def pipeline_params(self) -> dict[str, Any]:
-        """Return a copy of the configured pipeline parameters."""
-        return cast(dict[str, Any], self.entry_params)
-
-    def plan(self, files: InputData) -> RunPlan:
-        """Build a staged preprocessing run plan from file inputs.
+    def plan(
+        self,
+        inputs: InputData,
+        *,
+        save_filepaths_to: Path | str | None = None,
+        save_plan_to: Path | str | None = None,
+    ) -> RunPlan:
+        """Build a staged preprocessing run plan from run inputs.
 
         Args:
-            files: File input specification. This may be a single path, a
-                sequence of paths, or a finder configuration used to discover
-                active files.
+            inputs: Run inputs accepted by
+                :meth:`~niiflow.preproc.workflows.mixins.SupportsFileDiscovery.discover_active_files`.
+            save_filepaths_to: Optional ``.txt`` path for discovered active file paths.
+            save_plan_to: Optional ``.duckdb`` / ``.json`` path for the staged run plan.
 
         Returns:
             A run plan containing one staged entry per discovered active file.
@@ -122,62 +125,139 @@ class DynamicPreprocessingWorkflow(
             This method performs discovery and staging only. It does not execute
             the preprocessing pipeline.
         """
-        self.configure_files(files)
-        active_files = self.discover_active_files()
-        entries = self.stage_active_files(active_files)
-        return RunPlan(entries=tuple(entries))
-
-    def run_inputs(self, files: InputData) -> RunPlan:
-        """Plan and execute preprocessing from file run inputs.
-
-        This method resolves ``files`` into active files, stages one entry per
-        active file, executes the resulting run plan, and returns that plan.
-
-        Explicit file paths are used directly. Directory paths require a configured
-        data explorer and are searched during planning.
-
-        Args:
-            files: File run inputs. This may be a single file path, a sequence of
-                file paths, a directory path, or a sequence mixing files and
-                directories. Directory inputs require ``explorer_params`` to have
-                been provided when constructing the workflow.
-
-        Returns:
-            The run plan that was built and executed.
-
-        Raises:
-            FileNotFoundError: If any provided path does not exist.
-            ValueError: If directory inputs are provided without a configured data
-                explorer.
-        """
-        plan = self.plan(files)
-        self.run_plan(plan)
-        return plan
-
-    def run(self, target: InputData | RunPlan) -> None:
-        """Run preprocessing from file inputs or an existing run plan.
-
-        If ``target`` is a :class:`RunPlan`, it is executed directly without file
-        discovery or staging. If ``target`` is file input, it is passed to
-        :meth:`run_inputs`, which builds and executes a new run plan.
-
-        Args:
-            target: Either a :class:`RunPlan` to execute, or file run inputs accepted
-                by :meth:`run_inputs`.
-
-        Notes:
-            Use :meth:`plan` when you want to build a run plan without executing it.
-            Use :meth:`run_plan` when you want to execute a previously built or
-            loaded plan explicitly.
-        """
-        if isinstance(target, RunPlan):
-            self.run_plan(target)
-        else:
-            self.run_inputs(target)
+        active_files = self.discover_active_files(inputs, save_to=save_filepaths_to)
+        return self.stage_active_files(active_files, save_to=save_plan_to)
 
     @staticmethod
     def process_single(entry: StagedEntry) -> None:
         """Run the configured preprocessing pipeline for one staged entry."""
-        pipeline = create_pipeline(entry.params)
-        ctx = RuntimeContext(run_id=str(entry.active))
-        pipeline.run(ctx)
+        dynamic_pipeline(entry.params, run_id=str(entry.active))
+
+
+def dynamic_workflow(
+    *,
+    settings: Mapping[str, Any] | None = None,
+    inputs: InputData | None = None,
+    save_filepaths_to: Path | str | None = None,
+    save_plan_to: Path | str | None = None,
+    from_plan: Path | str | None = None,
+    plan_only: bool = False,
+    dry_run: bool = False,
+) -> RunPlan:
+    """Instantiate and execute a :class:`DynamicPreprocessingWorkflow`.
+
+    This is the orchestration entry point for scripts and higher-level drivers,
+    analogous to :func:`~niiflow.preproc.pipelines.dynamic_pipeline`. The workflow
+    class itself stays limited to ``plan`` / ``run_plan`` / ``run``.
+
+    Modes (checked in order):
+
+    * ``from_plan`` — load a saved plan and execute it (or print it when
+      ``dry_run``). Planning is skipped; ``pipeline_params`` is forced to
+      ``None``. ``settings`` may be omitted. Extra ``inputs`` /
+      ``pipeline_params`` are ignored with a log message. Save paths and
+      ``plan_only`` must not be set.
+    * ``plan_only`` — build (and optionally save) a plan from ``inputs`` without
+      executing. Requires ``settings`` with non-None ``pipeline_params``. With
+      ``dry_run``, the plan is printed and not saved.
+    * default — plan from ``inputs`` then execute. Requires ``settings`` with
+      non-None ``pipeline_params``. With ``dry_run``, plan without saving,
+      print, and skip execution.
+
+    Args:
+        settings: Keyword arguments forwarded to
+            :class:`DynamicPreprocessingWorkflow`. Required unless ``from_plan``
+            is set; must include non-None ``pipeline_params`` for planning modes.
+            When ``from_plan`` is set, may be omitted (treated as ``{}``) and any
+            ``pipeline_params`` entry is cleared to ``None``.
+        inputs: Run inputs for planning modes. Required unless ``from_plan`` is set.
+        save_filepaths_to: Optional ``.txt`` path for discovered active files.
+        save_plan_to: Optional ``.duckdb`` / ``.json`` path for the staged plan.
+        from_plan: Path to a saved plan to load and execute (skips planning).
+        plan_only: When ``True``, stop after planning (do not execute).
+        dry_run: When ``True``, print the plan via :meth:`RunPlan.view` and do not
+            save or execute.
+
+    Returns:
+        The built or loaded :class:`~niiflow.preproc.workflows.plan.RunPlan`.
+
+    Raises:
+        ValueError: If mode arguments conflict or required ``settings`` / ``inputs``
+            / ``pipeline_params`` are missing.
+        TypeError: If ``settings`` is not a mapping or cannot bind to the workflow
+            constructor.
+    """
+    if from_plan is not None:
+        if plan_only:
+            raise ValueError("`from_plan` cannot be combined with `plan_only`")
+        if save_filepaths_to is not None or save_plan_to is not None:
+            raise ValueError(
+                "`from_plan` cannot be combined with `save_filepaths_to` or "
+                "`save_plan_to`"
+            )
+        if settings is None:
+            settings = {}
+        elif not isinstance(settings, Mapping):
+            raise TypeError(
+                f"`settings` must be a mapping or None, got {type(settings).__name__}"
+            )
+        else:
+            settings = dict(settings)
+
+        workflow = cast(
+            DynamicPreprocessingWorkflow,
+            create_workflow(
+                "DynamicPreprocessingWorkflow",
+                {**settings, "pipeline_params": None},
+            ),
+        )
+        if inputs is not None:
+            workflow.log(
+                "Ignoring `inputs` because `from_plan` is set; the loaded plan "
+                "defines the worklist.",
+                level="info",
+            )
+        if "pipeline_params" in settings:
+            workflow.log(
+                "Ignoring `pipeline_params` from settings because `from_plan` is "
+                "set; entry params come from the loaded plan.",
+                level="info",
+            )
+
+        run_plan = RunPlan.load(from_plan)
+        if dry_run:
+            print(run_plan.view())
+        else:
+            workflow.run_plan(run_plan)
+        return run_plan
+
+    if settings is None:
+        raise ValueError("`settings` is required unless `from_plan` is set")
+    if not isinstance(settings, Mapping):
+        raise TypeError(
+            f"`settings` must be a mapping or None, got {type(settings).__name__}"
+        )
+    settings = dict(settings)
+
+    if inputs is None:
+        raise ValueError("`inputs` is required unless `from_plan` is set")
+    if settings.get("pipeline_params") is None:
+        raise ValueError(
+            "`settings` must include a non-None `pipeline_params` unless "
+            "`from_plan` is set"
+        )
+
+    workflow = cast(
+        DynamicPreprocessingWorkflow,
+        create_workflow("DynamicPreprocessingWorkflow", settings),
+    )
+    run_plan = workflow.plan(
+        inputs,
+        save_filepaths_to=None if dry_run else save_filepaths_to,
+        save_plan_to=None if dry_run else save_plan_to,
+    )
+    if dry_run:
+        print(run_plan.view())
+    elif not plan_only:
+        workflow.run_plan(run_plan)
+    return run_plan
