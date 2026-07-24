@@ -68,7 +68,7 @@ settings:
 
 inputs:
   mode: search
-  roots: /root/of/BIDS/dataset
+  roots: /Users/P70090502/Documents/projects/SynthFCD/synthFCD/example_data/SASHIMI_examples
   explorer_params:
     patterns: "**/anat/*T1w.nii*"
     filters:
@@ -87,4 +87,5 @@ inputs:
             kwargs:
               filename_pattern: "*FLAIR.nii*"
 
+save_filepaths_to: /data/files/controls
 save_plan_to: /data/plans/controls.duckdb
