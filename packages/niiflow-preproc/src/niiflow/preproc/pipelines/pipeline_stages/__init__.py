@@ -23,11 +23,15 @@ __all__ = [
     "MinmaxNorm",
     "PadToRange",
     "PipelineStage",
+    "RelabelMask",
     "RuntimeContext",
     "Rename",
     "Reorient",
+    "SmoothMask",
     "ToNumpy",
     "ZTransformNorm",
+    "create_stage",
+    "discover_stage_classes",
 ]
 
 from .bias_field import ANTsBiasFieldCorrection
@@ -41,10 +45,12 @@ from .croppad import (
 )
 from .denoising import ANTsDenoise
 from .intensity_normalization import ClampIntensities, MinmaxNorm, ZTransformNorm
+from .masks import ApplyMask, RelabelMask, SmoothMask
 from .pipelines import ANTsPreprocessBrainImage
 from .qc import CheckDimensions, CheckVoxelSpacing
 from .registration import ANTsApplyTransforms, ANTsRegistration
 from .resampling import ANTsResample, ANTsResampleToTarget
 from .pipeline_stage import PipelineStage, RuntimeContext
 from .skull_stripping import ANTsBrainExtraction
-from .utility import ApplyMask, Delete, GetImage, Rename, Reorient, ToNumpy
+from .stage_factory import create_stage, discover_stage_classes
+from .utility import Delete, GetImage, Rename, Reorient, ToNumpy

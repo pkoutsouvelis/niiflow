@@ -66,9 +66,7 @@ class TestRunDynamicWorkflow:
             DynamicPreprocessingWorkflow, "process_single", staticmethod(_touch)
         )
 
-        result = run("dynamic_workflow", _config(tmp_path, file_path))
-
-        assert isinstance(result, RunPlan)
+        run("dynamic_workflow", _config(tmp_path, file_path))
         assert (tmp_path / "sentinels" / "img.nii.gz.done").exists()
 
     def test_plan_only_saves_without_executing(
@@ -81,14 +79,15 @@ class TestRunDynamicWorkflow:
             DynamicPreprocessingWorkflow, "process_single", staticmethod(_touch)
         )
 
-        result = run(
+        run(
             "dynamic_workflow",
             _config(tmp_path, file_path, save_plan_to=plan_path, plan_only=True),
         )
 
-        assert isinstance(result, RunPlan)
         assert plan_path.exists()
-        assert RunPlan.load(plan_path).entries == result.entries
+        loaded = RunPlan.load(plan_path)
+        assert len(loaded.entries) == 1
+        assert loaded.entries[0].active == file_path.resolve()
         assert not (tmp_path / "sentinels").exists()
 
     def test_dry_run_prints_without_saving_or_executing(
@@ -104,13 +103,14 @@ class TestRunDynamicWorkflow:
             DynamicPreprocessingWorkflow, "process_single", staticmethod(_touch)
         )
 
-        result = run(
+        run(
             "dynamic_workflow",
             _config(tmp_path, file_path, save_plan_to=plan_path, dry_run=True),
         )
 
-        assert isinstance(result, RunPlan)
-        assert result.view() in capsys.readouterr().out
+        captured = capsys.readouterr()
+        assert "RunPlan:" in captured.out
+        assert str(file_path.resolve()) in captured.out
         assert not plan_path.exists()
         assert not (tmp_path / "sentinels").exists()
 
@@ -129,7 +129,7 @@ class TestRunDynamicWorkflow:
         )
         assert not (tmp_path / "sentinels").exists()
 
-        result = run(
+        run(
             "dynamic_workflow",
             {
                 "settings": {
@@ -143,7 +143,6 @@ class TestRunDynamicWorkflow:
             },
         )
 
-        assert isinstance(result, RunPlan)
         assert (tmp_path / "sentinels" / "img.nii.gz.done").exists()
 
     def test_run_from_loaded_config_file(
@@ -160,8 +159,8 @@ class TestRunDynamicWorkflow:
             DynamicPreprocessingWorkflow, "process_single", staticmethod(_touch)
         )
 
-        result = run("dynamic_workflow", load_config(config_path))
+        run("dynamic_workflow", load_config(config_path))
 
         assert plan_path.exists()
-        assert len(result.entries) == 1
+        assert len(RunPlan.load(plan_path).entries) == 1
         assert not (tmp_path / "sentinels").exists()

@@ -15,11 +15,12 @@ from .intensity_normalization import (
     minmax_norm,
     z_transform_norm,
 )
+from .masks import ants_apply_mask, relabel_mask, smooth_mask
 from .pipelines import ants_preprocess_brain_image
 from .registration import ants_apply_transforms, ants_registration
 from .reorientation import ants_reorient
 from .resampling import ants_resample, ants_resample_to_target
-from .skull_stripping import ants_brain_extraction, ants_apply_mask
+from .skull_stripping import ants_brain_extraction
 
 __all__ = [
     "ants_apply_transforms",
@@ -36,6 +37,8 @@ __all__ = [
     "center_pad",
     "ants_denoise",
     "ants_apply_mask",
+    "smooth_mask",
+    "relabel_mask",
     "ants_preprocess_brain_image",
     "ants_registration",
     "ants_reorient",

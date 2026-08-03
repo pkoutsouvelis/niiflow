@@ -44,7 +44,7 @@ class ClampIntensities(PipelineStage):
 
     * ``out_image`` — intensity-clamped image.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
     """
@@ -100,7 +100,7 @@ class ZTransformNorm(PipelineStage):
 
     * ``out_image`` — z-transformed image.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
     """
@@ -156,7 +156,7 @@ class MinmaxNorm(PipelineStage):
 
     * ``out_image`` — min-max normalized image.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
     """

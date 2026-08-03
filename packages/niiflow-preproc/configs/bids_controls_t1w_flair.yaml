@@ -17,10 +17,10 @@ settings:
     params:
       pointers:
         steps.qc.params.image: input
-        steps.qc.save_options.report: output
+        steps.qc.save_outputs.report: output
         steps.strip.params.image: input
-        steps.strip.save_options.out_image: output
-        steps.strip.save_options.brain_mask: output
+        steps.strip.save_outputs.out_image: output
+        steps.strip.save_outputs.brain_mask: output
   pipeline_params:
     verbose: true
     steps:
@@ -32,7 +32,7 @@ settings:
           op: "<="
           id: "ctx.run_id"
           log: true
-        save_options:
+        save_outputs:
           report:
             root:
               mode: parent_match
@@ -46,8 +46,8 @@ settings:
         params:
           image: "{active.path}"
           modality: t1
-          enable: "ctx.artifacts.qc.passed"
-        save_options:
+          enable: "ctx.outputs.qc.passed"
+        save_outputs:
           out_image:
             root:
               mode: parent_match

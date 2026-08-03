@@ -1,44 +1,24 @@
 """Skull-stripping functions for ANTsImage objects.
 
 Wrappers around the ANTsPyNet deep-learning brain extraction
-(:func:`antspynet.utilities.brain_extraction`) and the ANTs masking routine
-(:func:`ants.mask_image`). See the ANTsPy / ANTsPyNet documentation for the full
-behaviour of the underlying calls.
+(:func:`antspynet.utilities.brain_extraction`). Mask application is delegated
+to :func:`~niiflow.preproc.functional.image.masks.ants_apply_mask`. See the
+ANTsPy / ANTsPyNet documentation for the full behaviour of the underlying
+calls.
 """
 
 from __future__ import annotations
 
 __all__ = [
-    "ants_apply_mask",
     "ants_brain_extraction",
 ]
 
-from typing import Any
-
 from ants.core import ANTsImage
-from ants.ops import mask_image, threshold_image, morphology
+from ants.ops import morphology, threshold_image
 from antspynet.utilities import brain_extraction
 
+from .masks import ants_apply_mask
 from .utils import ensure_ants_image
-
-
-def ants_apply_mask(**kwargs: Any) -> ANTsImage:
-    """Apply a (possibly multi-label) mask to an ANTsImage.
-
-    Wraps :func:`ants.mask_image`. All arguments are forwarded as keyword
-    arguments.
-
-    Args:
-        **kwargs:
-            Keyword arguments forwarded to :func:`ants.mask_image`. Common
-            ones include ``image`` (the :class:`ants.core.ANTsImage` to mask),
-            ``mask`` (the mask or label image), ``level`` (label value(s) to
-            keep), and ``binarize``.
-
-    Returns:
-        The masked :class:`ants.core.ANTsImage`.
-    """
-    return mask_image(**kwargs)
 
 
 def ants_brain_extraction(

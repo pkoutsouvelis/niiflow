@@ -219,7 +219,7 @@ class ANTsRegistration(PipelineStage):
 
     When ``apply_forward`` is false, only the transform lists are returned.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
     * ``fwdtransforms`` / ``invtransforms`` — JSON manifest path. Each chain is
@@ -303,7 +303,7 @@ class ANTsApplyTransforms(PipelineStage):
 
     * ``out_image`` — the transformed image on ``target``'s grid.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``). No other artifact is
       written.

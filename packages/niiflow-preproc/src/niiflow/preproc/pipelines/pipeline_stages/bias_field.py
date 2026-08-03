@@ -35,7 +35,7 @@ class ANTsBiasFieldCorrection(PipelineStage):
 
     * ``out_image`` — bias-corrected image.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
     """

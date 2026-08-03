@@ -10,6 +10,8 @@ __all__ = [
     "center_crop",
     "pad_to_range",
     "center_pad",
+    "smooth_mask",
+    "relabel_mask",
 ]
 
 from .croppad import (
@@ -21,3 +23,4 @@ from .croppad import (
     pad_to_range,
 )
 from .intensity_normalization import clamp_intensities, minmax_norm, z_transform_norm
+from .masks import relabel_mask, smooth_mask

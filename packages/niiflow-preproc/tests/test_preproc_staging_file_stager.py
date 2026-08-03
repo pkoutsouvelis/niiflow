@@ -27,7 +27,6 @@ from niiflow.preproc.staging import (
 from niiflow.preproc.staging.stager import (
     StageContext,
     Stager,
-    StagedEntry,
     StagingErrorRecord,
 )
 from niiflow.preproc.staging.stager_factory import discover_stager_classes
@@ -174,6 +173,38 @@ class TestPointerValidation:
     def test_rejects_non_string_pointer_keys(self) -> None:
         with pytest.raises(TypeError, match="Pointer keys must be strings"):
             FileStager({1: "input"})  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("pointers", [None, {}])
+    def test_pointers_may_be_omitted(self, pointers: dict[str, str] | None) -> None:
+        assert FileStager(pointers).pointers == {}
+
+    def test_pointers_default_to_empty(self) -> None:
+        assert FileStager().pointers == {}
+
+    def test_rejects_non_mapping_pointers(self) -> None:
+        with pytest.raises(TypeError, match="pointers must be a dictionary"):
+            FileStager(["mask"])  # type: ignore[arg-type]
+
+    def test_stages_dynamic_references_without_pointers(
+        self, bids_tree: dict[str, Path]
+    ) -> None:
+        """Dynamic-reference-only staging needs no pointers at all."""
+        stager = FileStager()
+        entry = make_entries(
+            [bids_tree["active"]],
+            {"subject": "{active.stem}", "where": "{active.parent}"},
+        )[0]
+        staged = stager.stage([entry])[0]
+
+        active = bids_tree["active"]
+        expected_stem = active.name[: -len(get_ext(active))]
+        assert staged.params["subject"] == expected_stem
+        assert staged.params["where"] == active.parent
+
+    def test_create_stager_without_kwargs(self) -> None:
+        stager = create_stager("FileStager")
+        assert isinstance(stager, FileStager)
+        assert stager.pointers == {}
 
 
 # ---------------------------------------------------------------------------

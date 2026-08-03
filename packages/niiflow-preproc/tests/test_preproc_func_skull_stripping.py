@@ -5,10 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from niiflow.preproc.functional.image.skull_stripping import (
-    ants_brain_extraction,
-    ants_apply_mask,
-)
+from niiflow.preproc.functional.image.skull_stripping import ants_brain_extraction
 
 
 @pytest.fixture
@@ -27,33 +24,6 @@ class _MorphResult:
 
     def iMath_fill_holes(self):
         return self._mask
-
-
-def test_ants_apply_mask_forwards_kwargs(
-    ants_image, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    mask = ants_image.clone()
-    calls: list[dict] = []
-
-    def fake_apply_mask(**kwargs):
-        calls.append(kwargs)
-        return ants_image
-
-    monkeypatch.setattr(
-        "niiflow.preproc.functional.image.skull_stripping.mask_image",
-        fake_apply_mask,
-    )
-    out = ants_apply_mask(image=ants_image, mask=mask, level=1, binarize=True)
-
-    assert calls == [
-        {
-            "image": ants_image,
-            "mask": mask,
-            "level": 1,
-            "binarize": True,
-        }
-    ]
-    assert out is ants_image
 
 
 class TestBrainExtractionAnts:

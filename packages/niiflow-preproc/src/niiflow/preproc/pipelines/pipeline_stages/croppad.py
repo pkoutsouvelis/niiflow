@@ -46,7 +46,7 @@ class CropToRange(PipelineStage):
 
     * ``out_image`` — cropped image.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
     """
@@ -100,7 +100,7 @@ class CropToMask(PipelineStage):
     * ``out_image`` — cropped image.
     * ``ranges`` — per-axis ``(start, stop)`` tuple applied by the crop.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
     * ``ranges`` — JSON path for the crop specification.
@@ -162,7 +162,7 @@ class CenterCrop(PipelineStage):
     * ``out_image`` — center-cropped image.
     * ``ranges`` — per-axis ``(start, stop)`` tuple applied by the crop.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
     * ``ranges`` — JSON path for the crop specification.
@@ -222,7 +222,7 @@ class PadToRange(PipelineStage):
 
     * ``out_image`` — padded image.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
     """
@@ -278,7 +278,7 @@ class CenterPad(PipelineStage):
     * ``out_image`` — center-padded image.
     * ``ranges`` — per-axis ``(before, after)`` padding applied.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
     * ``ranges`` — JSON path for the padding specification.

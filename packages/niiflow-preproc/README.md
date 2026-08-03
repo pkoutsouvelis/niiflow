@@ -55,12 +55,12 @@ runs it immediately under a fresh `RuntimeContext`. `steps` may be either:
 - an **id-keyed mapping** with an optional top-level `order` (used here so steps can
 reference each other by id).
 
-Each step spec is `{name, params, save_options, verbose}`:
+Each step spec is `{name, params, save_outputs, verbose}`:
 
 - `name` — a registered stage class (see [Available stages](#available-stages)).
 - `params` — keyword inputs to the stage. String values may use `ctx.` references such
-as `"ctx.run_id"` or `"ctx.artifacts.<step_id>.<output>"`.
-- `save_options` — per-output paths to persist results to disk.
+as `"ctx.run_id"` or `"ctx.outputs.<step_id>.<output>"`.
+- `save_outputs` — per-output paths to persist results to disk.
 
 The example below uses **simple, explicit paths and `ctx.` references** (no staging). A
 single QC step (`CheckVoxelSpacing`) runs first, and its boolean `passed` output is
@@ -84,25 +84,25 @@ dynamic_pipeline(
                     "id": "ctx.run_id",
                     "log": True,
                 },
-                "save_options": {"report": "/data/derivatives/sub-01_qc.json"},
+                "save_outputs": {"report": "/data/derivatives/sub-01_qc.json"},
             },
             # Gated by QC: skipped entirely when qc.passed is False.
             "n4": {
                 "name": "ANTsBiasFieldCorrection",
                 "params": {
                     "image": "/data/sub-01/anat/sub-01_T1w.nii.gz",
-                    "enable": "ctx.artifacts.qc.passed",
+                    "enable": "ctx.outputs.qc.passed",
                 },
-                "save_options": {"out_image": "/data/derivatives/sub-01_desc-n4_T1w.nii.gz"},
+                "save_outputs": {"out_image": "/data/derivatives/sub-01_desc-n4_T1w.nii.gz"},
             },
             "strip": {
                 "name": "ANTsBrainExtraction",
                 "params": {
                     "image": "/data/sub-01/anat/sub-01_T1w.nii.gz",
                     "modality": "t1",
-                    "enable": "ctx.artifacts.qc.passed",
+                    "enable": "ctx.outputs.qc.passed",
                 },
-                "save_options": {
+                "save_outputs": {
                     "out_image": "/data/derivatives/sub-01_desc-brain_T1w.nii.gz",
                     "brain_mask": "/data/derivatives/sub-01_desc-brain_mask.nii.gz",
                 },
@@ -116,16 +116,16 @@ dynamic_pipeline(
 
 How the `enable` gate works: `enable` is resolved first (including `ctx.` references)
 before any other parameter is loaded. If `enable` is `False`, the stage returns without
-calling `forward`, writing outputs, or publishing artifacts — and without materialising
-other `params`. This pairs naturally with a boolean QC artifact like
-`"ctx.artifacts.qc.passed"`, so downstream gated steps may still declare
-`ctx.artifacts.<upstream>.<output>` inputs even when that upstream step was skipped.
+calling `forward`, writing outputs, or publishing them to the context — and without
+materialising other `params`. This pairs naturally with a boolean QC output like
+`"ctx.outputs.qc.passed"`, so downstream gated steps may still declare
+`ctx.outputs.<upstream>.<output>` inputs even when that upstream step was skipped.
 
 A common pairing is `GetImage` with this gate: it materialises an image into the context
-as `out_image`, so pointing `enable` at a QC artifact and setting
-`save_options["out_image"]` to a separate folder persists only the images that passed
-quality control, e.g. `params={"image": "ctx.artifacts.strip.out_image", "enable":
-"ctx.artifacts.qc.passed"}` with `save_options={"out_image":
+as `out_image`, so pointing `enable` at a QC output and setting
+`save_outputs["out_image"]` to a separate folder persists only the images that passed
+quality control, e.g. `params={"image": "ctx.outputs.strip.out_image", "enable":
+"ctx.outputs.qc.passed"}` with `save_outputs={"out_image":
 "/data/passed/sub-01_T1w.nii.gz"}`.
 
 ### Available stages
@@ -134,7 +134,8 @@ quality control, e.g. `params={"image": "ctx.artifacts.strip.out_image", "enable
 `ANTsPreprocessBrainImage`, `ANTsRegistration`, `ANTsApplyTransforms`, `ANTsResample`,
 `ANTsResampleToTarget`, `Reorient`, `ClampIntensities`, `MinmaxNorm`, `ZTransformNorm`,
 `CenterCrop`, `CenterPad`, `CropToMask`, `CropToRange`, `PadToRange`, `CheckDimensions`,
-`CheckVoxelSpacing`, `ApplyMask`, `ToNumpy`, `GetImage`, `Rename`, `Delete`.
+`CheckVoxelSpacing`, `ApplyMask`, `SmoothMask`, `RelabelMask`, `ToNumpy`,
+`GetImage`, `Rename`, `Delete`.
 
 ---
 
@@ -200,12 +201,17 @@ and may reference resolved inputs via `{params...}` and the active file via
 derivative paths. Set it to `false` to treat existing outputs as already done
 (see [Continuing from existing runs](#continuing-from-existing-runs)).
 
+`pointers` may also be omitted entirely. `FileStager` then resolves dynamic
+references (`{active.*}` / `{params.*}`) throughout `params` without treating any
+parameter as a file to locate or materialise — useful when the pipeline already spells
+out every path and only needs the placeholders expanded.
+
 Roots can be **discovered** relative to the active file: `parent_up` (N levels up),
 `parent_match` (nearest/farthest ancestor matching a pattern), and `mirror` (rewrite one
 hierarchy into another, e.g. `rawdata → derivatives`).
 
 The pipeline and staging specs below work together: step parameters use
-`{active.path}` and output `save_options` hold staging placeholders that
+`{active.path}` and output `save_outputs` hold staging placeholders that
 `FileStager` resolves before execution. A QC step gates skull-stripping via
 `enable`:
 
@@ -221,7 +227,7 @@ pipeline_params:
         op: "<="
         id: "ctx.run_id"
         log: true
-      save_options:
+      save_outputs:
         report:
           root:
             mode: parent_match
@@ -235,8 +241,8 @@ pipeline_params:
       params:
         image: "{active.path}"
         modality: t1
-        enable: "ctx.artifacts.qc.passed"
-      save_options:
+        enable: "ctx.outputs.qc.passed"
+      save_outputs:
         out_image:
           root:
             mode: parent_match
@@ -260,10 +266,10 @@ staging_params:
   params:
     pointers:
       steps.qc.params.image: input
-      steps.qc.save_options.report: output
+      steps.qc.save_outputs.report: output
       steps.strip.params.image: input
-      steps.strip.save_options.out_image: output
-      steps.strip.save_options.brain_mask: output
+      steps.strip.save_outputs.out_image: output
+      steps.strip.save_outputs.brain_mask: output
 ```
 
 For an active file `.../rawdata/sub-01/anat/sub-01_T1w.nii.gz` this stages the T1w as
@@ -284,12 +290,12 @@ staging_params:
   - stager_name: FileStager
     params:
       pointers:
-        steps.qc.save_options.report: output
+        steps.qc.save_outputs.report: output
   - stager_name: FileStager
     params:
       pointers:
-        steps.strip.save_options.out_image: output
-        steps.strip.save_options.brain_mask: output
+        steps.strip.save_outputs.out_image: output
+        steps.strip.save_outputs.brain_mask: output
 ```
 
 ### Available stagers
@@ -342,7 +348,9 @@ dynamic_workflow(
 `from_file` / explicit paths), stages per-entry parameters, and returns a `RunPlan`
 of `StagedEntry` objects. To plan and execute, call `plan` then `run_plan`, or use
 `dynamic_workflow(...)` for a single orchestration entry point (plan /
-plan-only / from-plan / dry-run). The CLI `dynamic_workflow` command uses that driver.
+plan-only / from-plan / dry-run). That driver returns nothing; persist with
+`save_plan_to` and reload via `from_plan` / `RunPlan.load` when you need the plan.
+The CLI `dynamic_workflow` command uses that driver.
 - **Logging** is controlled by `logs_root` and the `main_logs` / `status_logs` /
 `worker_logs` / `dev_mode` flags. The status log records one line per entry
 (`<active> | SUCCESS`, `... | FAILURE | <traceback>`, `... | TIMEOUT`, or
@@ -394,7 +402,7 @@ staging_params:
     allow_overwrite: false
     allow_failed_entries: true
     pointers:
-      steps.strip.save_options.out_image: output
+      steps.strip.save_outputs.out_image: output
       # ...
 ```
 
@@ -491,7 +499,8 @@ niiflow-preproc/
     │       ├── intensity_normalization.py  # Clamp / Minmax / ZTransform
     │       ├── croppad.py            # CenterCrop / CenterPad / Crop/Pad-to-range
     │       ├── qc.py                 # CheckDimensions / CheckVoxelSpacing
-    │       ├── utility.py            # ApplyMask / Reorient / ToNumpy / GetImage / Rename / Delete
+    │       ├── masks.py              # ApplyMask / SmoothMask / RelabelMask
+    │       ├── utility.py            # Reorient / ToNumpy / GetImage / Rename / Delete
     │       └── pipelines.py          # ANTsPreprocessBrainImage
     ├── workflows/
     │   ├── workflow.py               # ProcessingWorkflow / PlannableWorkflow (execution engine)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 __all__ = [
-    "ApplyMask",
     "Delete",
     "GetImage",
     "Rename",
@@ -19,8 +18,6 @@ from typing import Any
 from ants.core import ANTsImage
 
 from niiflow.preproc.functional.image.reorientation import ants_reorient
-from niiflow.preproc.functional.image.skull_stripping import ants_apply_mask
-
 from niiflow.preproc.functional.image.utils import ants_to_numpy_with_metadata
 from niiflow.preproc.pipelines.pipeline_stages.pipeline_stage import PipelineStage
 from niiflow.preproc.utils.file import (
@@ -48,7 +45,7 @@ class Delete(PipelineStage):
 
     * ``deleted`` — list of resolved :class:`pathlib.Path` objects removed.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``deleted`` — optional JSON path recording the deleted paths as strings.
     """
@@ -108,7 +105,7 @@ class Rename(PipelineStage):
 
     **Parameters** (``params``):
 
-    * ``path`` — source file path, or a ``ctx.`` reference resolving to one. Must
+    * ``source`` — source file path, or a ``ctx.`` reference resolving to one. Must
       exist on disk.
     * ``dest`` — destination file path. Parent directories are created when
       missing. An existing file at this path is overwritten.
@@ -117,17 +114,17 @@ class Rename(PipelineStage):
 
     **Outputs** (from :meth:`forward`):
 
-    * ``path`` — resolved :class:`pathlib.Path` of the file at its new location.
+    * ``out_path`` — resolved :class:`pathlib.Path` of the file at its new location.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
-    * ``path`` — optional JSON path recording the new location as a string.
+    * ``out_path`` — optional JSON path recording the new location as a string.
     """
 
-    REQUIRED_PARAMS = frozenset({"path", "dest"})
+    REQUIRED_PARAMS = frozenset({"source", "dest"})
 
     def check_params(self, params: dict[str, Any]) -> None:
-        for key in ("path", "dest"):
+        for key in ("source", "dest"):
             value = params[key]
             if not isinstance(value, (str, Path)):
                 raise TypeError(f"`{key}` must be a path, got {type(value).__name__}")
@@ -137,7 +134,7 @@ class Rename(PipelineStage):
             )
 
     def load_param(self, key: str, value: Any) -> Any:
-        if key in {"path", "dest"}:
+        if key in {"source", "dest"}:
             return resolve_path(value)
         if key == "copy":
             if not isinstance(value, bool):
@@ -146,7 +143,7 @@ class Rename(PipelineStage):
         return value
 
     def forward(self, **params: Any) -> dict[str, Any]:
-        src: Path = params["path"]
+        src: Path = params["source"]
         dest: Path = params["dest"]
         copy: bool = params.get("copy", False)
 
@@ -160,54 +157,11 @@ class Rename(PipelineStage):
             shutil.copy2(src, dest)
         else:
             shutil.move(str(src), str(dest))
-        return {"path": dest}
+        return {"out_path": dest}
 
     def save_output(self, key: str, value: Any, output_path: Path) -> Path:
-        if key == "path":
+        if key == "out_path":
             return write_json({"path": str(value)}, output_path)
-        raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
-
-
-class ApplyMask(PipelineStage):
-    """Apply a mask to an image.
-
-    Wraps
-    :func:`~niiflow.preproc.functional.image.skull_stripping.ants_apply_mask`.
-
-    **Parameters** (``params``):
-
-    * ``image`` — :class:`ants.core.ANTsImage` or path to load.
-    * ``mask`` — mask or label image (:class:`ants.core.ANTsImage` or path).
-    * Additional kwargs are forwarded to ``ants_apply_mask`` (e.g. ``level``,
-      ``binarize``).
-
-    **Outputs** (from :meth:`forward`):
-
-    * ``out_image`` — masked image.
-
-    **Persistence** (``save_options``):
-
-    * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
-    """
-
-    REQUIRED_PARAMS = frozenset({"image", "mask"})
-
-    def load_param(self, key: str, value: Any) -> Any:
-        if key in {"image", "mask"}:
-            if isinstance(value, ANTsImage):
-                return value
-            try:
-                return ants_image_read(value, reorient=True)
-            except Exception as e:
-                raise ValueError(f"Failed to read {key} from {value}") from e
-        return value
-
-    def forward(self, **params: Any) -> dict[str, Any]:
-        return {"out_image": ants_apply_mask(**params)}
-
-    def save_output(self, key: str, value: Any, output_path: Path) -> Path:
-        if key == "out_image":
-            return ants_image_write(value, output_path)
         raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
 
 
@@ -219,7 +173,7 @@ class Reorient(PipelineStage):
     :func:`~niiflow.preproc.utils.file.ants_image_read` (with ``reorient=True``)
     are already canonicalized to ITK **RPI**; use this stage when a different
     target orientation is required (for example before writing NIfTI, or for
-    in-memory images passed through ``ctx.artifacts``).
+    in-memory images passed through ``ctx.outputs``).
 
     **Parameters** (``params``):
 
@@ -232,7 +186,7 @@ class Reorient(PipelineStage):
 
     * ``out_image`` — reoriented image.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
     """
@@ -263,10 +217,10 @@ class GetImage(PipelineStage):
 
     A thin stage that materialises ``image`` (loading it from disk when given a
     path) and publishes it as ``out_image`` so downstream stages can consume it
-    via ``ctx.artifacts.<step>.out_image``. Saving follows naturally through the
-    standard persistence path: set ``save_options["out_image"]`` to a NIfTI path
-    to write it. Combined with the shared ``enable`` flag and a QC artifact (e.g.
-    ``"ctx.artifacts.qc.passed"``), this lets a pipeline persist only the images
+    via ``ctx.outputs.<step>.out_image``. Saving follows naturally through the
+    standard persistence path: set ``save_outputs["out_image"]`` to a NIfTI path
+    to write it. Combined with the shared ``enable`` flag and a QC output (e.g.
+    ``"ctx.outputs.qc.passed"``), this lets a pipeline persist only the images
     that passed quality control into a separate output folder.
 
     **Parameters** (``params``):
@@ -278,7 +232,7 @@ class GetImage(PipelineStage):
 
     * ``out_image`` — the materialised image.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
     """
@@ -320,7 +274,7 @@ class ToNumpy(PipelineStage):
     * ``metadata`` — orientation metadata from
       :func:`~niiflow.preproc.functional.image.utils.ants_to_numpy_with_metadata`.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``array`` — ``.npy`` path.
     * ``metadata`` — JSON path.

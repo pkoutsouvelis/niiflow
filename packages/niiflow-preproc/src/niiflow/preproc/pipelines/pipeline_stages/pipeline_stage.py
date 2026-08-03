@@ -45,21 +45,23 @@ class RuntimeContext:
             (when outputs were written) listing output keys and absolute path(s)
             written per key (a single :class:`pathlib.Path` or, for multi-file
             outputs such as transform lists, ``tuple[Path, ...]``).
-        artifacts: In-memory outputs from completed steps, keyed by ``step_id``.
+        outputs: In-memory outputs from completed steps, keyed by ``step_id``.
             Each value is the mapping returned by :meth:`PipelineStage.forward`
             (e.g. ANTs images, arrays). Disk persistence does **not** replace
-            these values; downstream stages consume them via ``ctx.`` refs.
+            these values; downstream stages consume them via ``ctx.`` refs. Paths
+            actually written are recorded separately under ``metadata`` as
+            ``saved_paths``.
         steps_completed: Step ids published so far, in execution order.
 
     Only :meth:`PipelineStage.run` (and the pipeline runner) write to
-    ``artifacts``, ``metadata``, and ``steps_completed``; stage hooks must not
+    ``outputs``, ``metadata``, and ``steps_completed``; stage hooks must not
     mutate them directly.
     """
 
     run_id: str | None = None
     step_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
-    artifacts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    outputs: dict[str, dict[str, Any]] = field(default_factory=dict)
     steps_completed: list[str] = field(default_factory=list)
 
 
@@ -68,8 +70,8 @@ def _resolve_ctx_path(ctx: RuntimeContext, ref: str) -> Any:
 
     Walks attributes on :class:`RuntimeContext`, keys on nested dicts, and list indices
     written as ``[idx]`` (e.g. ``ctx.metadata.subject``,
-    ``ctx.artifacts.<step_id>.<output>``, ``ctx.steps_completed.[0]``). Artifact outputs
-    are addressed by explicit pipeline step id, not by position.
+    ``ctx.outputs.<step_id>.<output>``, ``ctx.steps_completed.[0]``). Step outputs are
+    addressed by explicit pipeline step id, not by position.
     """
     if not isinstance(ref, str) or not ref.startswith(_CTX_PREFIX):
         raise ValueError(f"Context path must start with 'ctx.', got {ref!r}")
@@ -175,9 +177,9 @@ class PipelineStage(ABC):
     pass producing named outputs, optional persistence of those outputs, and
     optional per-step metadata (via :meth:`update_metadata`).
 
-    Construction accepts ``params`` and ``save_options`` dicts.
-    Each ``save_options`` entry is a path string, a :class:`pathlib.Path`, or
-    ``None`` (skip). The :attr:`save_options` setter drops ``None`` entries and
+    Construction accepts ``params`` and ``save_outputs`` dicts.
+    Each ``save_outputs`` entry is a path string, a :class:`pathlib.Path`, or
+    ``None`` (skip). The :attr:`save_outputs` setter drops ``None`` entries and
     normalises the rest to absolute :class:`pathlib.Path` objects via
     :func:`~niiflow.preproc.utils.file.resolve_path` (paths need not exist yet).
 
@@ -191,7 +193,7 @@ class PipelineStage(ABC):
 
     String parameter values may reference :class:`RuntimeContext` fields using
     ``"ctx.<dotted.path>"`` (e.g. ``ctx.run_id``, ``ctx.metadata.subject``,
-    ``ctx.artifacts.<step_id>.<output>``).
+    ``ctx.outputs.<step_id>.<output>``).
     References are resolved in
     :meth:`_load_params` before :meth:`load_param` is invoked for every key
     (except ``enable``, which is evaluated earlier via :meth:`_check_enabled`).
@@ -199,13 +201,13 @@ class PipelineStage(ABC):
     An optional ``enable`` entry in ``params`` (default ``True``) is resolved and
     evaluated by :meth:`_check_enabled` **before** other parameters are loaded.
     When ``enable`` is ``False``, the stage returns without calling
-    :meth:`forward`, writing outputs, or updating ``ctx.artifacts``,
+    :meth:`forward`, writing outputs, or updating ``ctx.outputs``,
     ``ctx.metadata``, or ``ctx.steps_completed``. Other ``params`` are not
-    materialised when the stage is skipped. This pairs naturally with boolean QC
-    artifacts (e.g. ``"enable": "ctx.artifacts.<qc_step>.passed"``).
+    materialised when the stage is skipped. This pairs naturally with a boolean QC
+    output (e.g. ``"enable": "ctx.outputs.<qc_step>.passed"``).
 
     The machinery in :meth:`run` -- not subclasses -- owns publishing outputs to
-    ``ctx.artifacts[step_id]`` and appending to ``ctx.steps_completed``.
+    ``ctx.outputs[step_id]`` and appending to ``ctx.steps_completed``.
     """
 
     REQUIRED_PARAMS: ClassVar[frozenset[str]] = frozenset()
@@ -213,7 +215,7 @@ class PipelineStage(ABC):
     def __init__(
         self,
         params: dict[str, Any] | None = None,
-        save_options: dict[str, Any] | None = None,
+        save_outputs: dict[str, Any] | None = None,
         verbose: bool = True,
     ) -> None:
         if not isinstance(verbose, bool):
@@ -222,7 +224,7 @@ class PipelineStage(ABC):
             )
         self.verbose = verbose
         self.params = params
-        self.save_options = save_options
+        self.save_outputs = save_outputs
 
     @property
     def params(self) -> dict[str, Any]:
@@ -246,38 +248,38 @@ class PipelineStage(ABC):
         self._params = deepcopy(params)
 
     @property
-    def save_options(self) -> dict[str, Path]:
-        return deepcopy(self._save_options)
+    def save_outputs(self) -> dict[str, Path]:
+        return deepcopy(self._save_outputs)
 
-    @save_options.setter
-    def save_options(self, save_options: dict[str, Any] | None) -> None:
+    @save_outputs.setter
+    def save_outputs(self, save_outputs: dict[str, Any] | None) -> None:
         """Validate and normalise pipeline save paths.
 
         Accepts per-output ``None`` (skip), a path string or :class:`pathlib.Path`. Each
         path is expanded and resolved to an absolute :class:`pathlib.Path`.
         """
-        if save_options is None:
-            save_options = {}
-        if not isinstance(save_options, dict):
+        if save_outputs is None:
+            save_outputs = {}
+        if not isinstance(save_outputs, dict):
             raise TypeError(
-                f"`save_options` must be a dictionary, got "
-                f"{type(save_options).__name__}"
+                f"`save_outputs` must be a dictionary, got "
+                f"{type(save_outputs).__name__}"
             )
 
         normalized: dict[str, Path] = {}
 
-        for key, value in deepcopy(save_options).items():
+        for key, value in deepcopy(save_outputs).items():
             if value is None:
                 continue
             elif isinstance(value, (str, Path)):
                 normalized[key] = resolve_path(value)
             else:
                 raise TypeError(
-                    f"`save_options['{key}']` must be a path string, Path object, "
+                    f"`save_outputs['{key}']` must be a path string, Path object, "
                     f"or None; got {type(value).__name__}"
                 )
 
-        self._save_options = normalized
+        self._save_outputs = normalized
 
     def log(self, message: str, level: LogLevel = "info") -> None:
         """Emit ``message`` through the module logger at ``level``.
@@ -314,8 +316,8 @@ class PipelineStage(ABC):
         Called from :meth:`run` (via :meth:`_load_params`) for each entry in ``params``
         when the stage is enabled, after any ``ctx.``-style reference has been resolved.
         Implementations should pass through values that are already in final form
-        (scalars, in-memory images resolved from ``ctx.artifacts``, pre-loaded arrays)
-        and materialise others (paths, remote URIs) as needed for :meth:`forward`.
+        (scalars, in-memory images resolved from ``ctx.outputs``, pre-loaded arrays) and
+        materialise others (paths, remote URIs) as needed for :meth:`forward`.
         """
         ...
 
@@ -323,7 +325,7 @@ class PipelineStage(ABC):
     def save_output(self, key: str, value: Any, output_path: Path) -> SavedPathRecord:
         """Persist one entry from :meth:`forward` to its configured artifact path.
 
-        Called from :meth:`_save_outputs` when ``save_options`` contains a non-``None``
+        Called from :meth:`_write_outputs` when ``save_outputs`` contains a non-``None``
         entry for ``key``. ``output_path`` is one absolute :class:`pathlib.Path` that
         points to a single location to save the artifact for ``key``.
 
@@ -351,7 +353,7 @@ class PipelineStage(ABC):
         """Return per-step metadata to record under ``ctx.metadata[step_id]``.
 
         Optional hook; the default returns an empty dict. ``outputs`` is the in-memory
-        mapping published at ``ctx.artifacts[step_id]`` (the ``forward`` return values,
+        mapping published at ``ctx.outputs[step_id]`` (the ``forward`` return values,
         not substituted with save paths).
 
         :meth:`run` merges the returned dict and adds ``saved_paths`` when
@@ -385,15 +387,15 @@ class PipelineStage(ABC):
             resolved[key] = self.load_param(key, _resolve_ctx_refs(value, ctx))
         return resolved
 
-    def _save_outputs(self, outputs: dict[str, Any]) -> dict[str, SavedPathRecord]:
+    def _write_outputs(self, outputs: dict[str, Any]) -> dict[str, SavedPathRecord]:
         """Persist configured outputs and return saved artifact path records."""
         written: dict[str, SavedPathRecord] = {}
-        for key, target in self.save_options.items():
+        for key, target in self.save_outputs.items():
             if target is None:
                 continue
             if key not in outputs:
                 raise ValueError(
-                    f"`save_options` contains {key!r}, but "
+                    f"`save_outputs` contains {key!r}, but "
                     f"`{type(self).__name__}.forward` did not return this output. "
                     f"Available outputs are {sorted(outputs)}."
                 )
@@ -539,12 +541,12 @@ class PipelineStage(ABC):
                 f"`{name}.forward` must return a dict, got {type(outputs).__name__}"
             )
 
-        ctx.artifacts[step_id] = dict(outputs)
+        ctx.outputs[step_id] = dict(outputs)
 
         self.log(f"[Stage {name} | {step_id}] Writing outputs...")
-        written = self._save_outputs(outputs)
+        written = self._write_outputs(outputs)
 
-        metadata = self.update_metadata(ctx.artifacts[step_id])
+        metadata = self.update_metadata(ctx.outputs[step_id])
         if not isinstance(metadata, dict):
             raise TypeError(
                 f"`{name}.update_metadata` must return a dict, "

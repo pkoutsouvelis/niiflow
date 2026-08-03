@@ -33,7 +33,7 @@ class ANTsBrainExtraction(PipelineStage):
     * ``out_image`` — skull-stripped (or masked) brain image.
     * ``brain_mask`` — brain mask when the functional call returns a tuple.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` / ``brain_mask`` — NIfTI paths (``.nii`` or ``.nii.gz``).
     """

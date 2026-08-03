@@ -66,7 +66,7 @@ class CheckVoxelSpacing(PipelineStage):
     * ``report`` — JSON-serialisable summary (``check``, ``passed``, ``value``,
       and ``id`` when provided).
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``passed`` — ``.txt`` path; one line ``True`` or ``False``.
     * ``value`` — ``.txt`` path; comma-separated observed spacing per axis.
@@ -178,7 +178,7 @@ class CheckDimensions(PipelineStage):
     * ``report`` — JSON-serialisable summary (``check``, ``passed``, ``value``,
       and ``id`` when provided).
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``passed`` — ``.txt`` path; one line ``True`` or ``False``.
     * ``value`` — ``.txt`` path; comma-separated observed shape per axis.

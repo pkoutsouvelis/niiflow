@@ -44,7 +44,7 @@ class ANTsPreprocessBrainImage(PipelineStage):
       mapping, e.g. ``brain_mask`` and ``bias_field`` (when the corresponding
       steps are enabled).
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` / ``brain_mask`` / ``bias_field`` — NIfTI paths (``.nii`` or
       ``.nii.gz``).

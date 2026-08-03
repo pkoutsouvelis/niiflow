@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "niiflow-preproc"
-version = "0.1.0"
+version = "0.2.0"
 description = "Offline preprocessing workflows for niiflow (heavy / optional deps isolated from training)."
 requires-python = ">=3.11"
 license = "MIT"
@@ -19,6 +19,7 @@ dependencies = [
     "duckdb>=1.1.0,<2.0.0",
     "nifti-finder>=2.0.0,<3.0.0",
     "tqdm>=4.66.0,<5.0.0",
+    "scipy>=1.14,<2.0",
 ]
 
 [project.scripts]

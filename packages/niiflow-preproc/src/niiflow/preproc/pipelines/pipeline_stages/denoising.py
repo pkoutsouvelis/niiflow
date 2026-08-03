@@ -32,7 +32,7 @@ class ANTsDenoise(PipelineStage):
 
     * ``out_image`` — denoised image.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
     """

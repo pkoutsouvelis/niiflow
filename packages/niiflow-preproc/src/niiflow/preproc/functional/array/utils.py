@@ -13,6 +13,20 @@ def validate_numeric_array(array: np.ndarray, name: str = "array") -> None:
         raise ValueError(f"`{name}` must have a numeric dtype, got {array.dtype}")
 
 
+def validate_binary_values(array: np.ndarray, name: str = "array") -> None:
+    """Ensure a numeric array contains only the values ``0`` and/or ``1``.
+
+    Raises:
+        ValueError: If `array` has any value outside ``{0, 1}``.
+    """
+    unique_vals = np.unique(array)
+    if not np.all(np.isin(unique_vals, (0, 1))):
+        raise ValueError(
+            f"`{name}` must contain only 0s and 1s, got unique values "
+            f"{unique_vals.tolist()}"
+        )
+
+
 def resolve_mask(mask: np.ndarray, name: str = "mask") -> np.ndarray:
     """Validate `mask` and coerce it to a boolean :class:`numpy.ndarray`.
 
@@ -31,12 +45,7 @@ def resolve_mask(mask: np.ndarray, name: str = "mask") -> np.ndarray:
     if mask.dtype == bool:
         bool_mask = mask
     elif np.issubdtype(mask.dtype, np.number):
-        unique_vals = np.unique(mask)
-        if not np.all(np.isin(unique_vals, (0, 1))):
-            raise ValueError(
-                f"`{name}` must contain only 0s and 1s, got unique values "
-                f"{unique_vals.tolist()}"
-            )
+        validate_binary_values(mask, name=name)
         bool_mask = mask.astype(bool)
     else:
         raise ValueError(

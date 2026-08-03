@@ -106,9 +106,8 @@ class TestMainDispatch:
     ) -> None:
         recorded: list[tuple[str, dict[str, Any]]] = []
 
-        def _record(name: str, config: dict[str, Any]):
+        def _record(name: str, config: dict[str, Any]) -> None:
             recorded.append((name, dict(config)))
-            return RunPlan(entries=())
 
         monkeypatch.setattr(commands, "run", _record)
 
@@ -131,8 +130,9 @@ class TestMainEquivalence:
             DynamicPreprocessingWorkflow, "process_single", staticmethod(_touch)
         )
 
-        direct_plan = commands.run("dynamic_workflow", load_config(config_path))
+        commands.run("dynamic_workflow", load_config(config_path))
         assert not (tmp_path / "sentinels").exists()
+        direct_plan = RunPlan.load(plan_path)
 
         cli_plan_path = tmp_path / "cli-plan.duckdb"
         cli_config = _config(

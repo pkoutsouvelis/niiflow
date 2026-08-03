@@ -37,7 +37,7 @@ class ANTsResample(PipelineStage):
 
     * ``out_image`` — resampled image.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
     """
@@ -90,7 +90,7 @@ class ANTsResampleToTarget(PipelineStage):
 
     * ``out_image`` — image resampled onto ``target``'s grid.
 
-    **Persistence** (``save_options``):
+    **Persistence** (``save_outputs``):
 
     * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
     """

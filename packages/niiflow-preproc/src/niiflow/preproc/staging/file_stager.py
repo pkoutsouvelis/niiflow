@@ -61,9 +61,15 @@ class FileStager(Stager):
     references. String specs may also use ``{active.<attr>}`` (``path``, ``name``,
     ``stem``, ``parent``).
 
+    ``pointers`` may be omitted (or ``None``) to stage with dynamic references
+    only: every ``{active.*}`` and ``{params.*}`` reference in ``params`` is still
+    expanded, but no parameter is treated as a file to resolve or materialise.
+
     Args:
         pointers:
             Mapping from dotted parameter paths to either ``"input"`` or ``"output"``.
+            ``None`` and ``{}`` both mean "no pointers"; dynamic references are
+            still resolved.
 
         ensure_inputs_exist:
             When ``True``, direct input paths must exist and be files. Search-mode
@@ -82,7 +88,7 @@ class FileStager(Stager):
 
     def __init__(
         self,
-        pointers: dict[str, PointerKind],
+        pointers: dict[str, PointerKind] | None = None,
         *,
         ensure_inputs_exist: bool = True,
         allow_overwrite: bool = True,

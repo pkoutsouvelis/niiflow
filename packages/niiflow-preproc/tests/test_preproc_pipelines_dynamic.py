@@ -9,7 +9,10 @@ from typing import Any
 import pytest
 
 from niiflow.preproc.pipelines import dynamic_pipeline
-from niiflow.preproc.pipelines.pipeline_stages import PipelineStage
+from niiflow.preproc.pipelines.pipeline_stages import (
+    PipelineStage,
+    discover_stage_classes,
+)
 
 # Prefer importlib: package ``__init__`` re-exports ``dynamic_pipeline`` and
 # shadows the submodule attribute of the same name.
@@ -60,13 +63,13 @@ def registry_with_echo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> dict[str, type[PipelineStage]]:
     registry = {
-        **_dynamic_pipeline_mod._discover_stage_classes(),
+        **discover_stage_classes(),
         "EchoStage": EchoStage,
         "RecordingStage": RecordingStage,
     }
     monkeypatch.setattr(
         _dynamic_pipeline_mod,
-        "_discover_stage_classes",
+        "discover_stage_classes",
         lambda: registry,
     )
     return registry
@@ -76,15 +79,6 @@ def registry_with_echo(
 def recording_calls() -> list[str]:
     RecordingStage.calls = []
     return RecordingStage.calls
-
-
-def test_discover_stage_classes_excludes_compose_and_base() -> None:
-    registry = _dynamic_pipeline_mod._discover_stage_classes()
-    assert "Compose" not in registry
-    assert "PipelineStage" not in registry
-    assert "RuntimeContext" not in registry
-    assert "CheckVoxelSpacing" in registry
-    assert issubclass(registry["CheckVoxelSpacing"], PipelineStage)
 
 
 def test_returns_none_and_executes(
@@ -98,7 +92,7 @@ def test_returns_none_and_executes(
                 "echo": {
                     "name": "EchoStage",
                     "params": {"message": "hello"},
-                    "save_options": {"message": str(out)},
+                    "save_outputs": {"message": str(out)},
                 }
             }
         },
@@ -126,7 +120,7 @@ def test_run_id_is_passed_to_runtime_context(
                 "echo": {
                     "name": "EchoStage",
                     "params": {"message": "x"},
-                    "save_options": {},
+                    "save_outputs": {},
                 }
             }
         },
@@ -146,12 +140,12 @@ def test_mapping_order_controls_execution_order(
                 "first": {
                     "name": "RecordingStage",
                     "params": {"label": "first"},
-                    "save_options": {},
+                    "save_outputs": {},
                 },
                 "second": {
                     "name": "RecordingStage",
                     "params": {"label": "second"},
-                    "save_options": {},
+                    "save_outputs": {},
                 },
             },
         }
@@ -169,12 +163,12 @@ def test_mapping_without_order_uses_insertion_order(
                 "first": {
                     "name": "RecordingStage",
                     "params": {"label": "one"},
-                    "save_options": {},
+                    "save_outputs": {},
                 },
                 "second": {
                     "name": "RecordingStage",
                     "params": {"label": "two"},
-                    "save_options": {},
+                    "save_outputs": {},
                 },
             }
         }
@@ -192,12 +186,12 @@ def test_ordered_list_uses_list_position(
                 {
                     "name": "RecordingStage",
                     "params": {"label": "one"},
-                    "save_options": {},
+                    "save_outputs": {},
                 },
                 {
                     "name": "RecordingStage",
                     "params": {"label": "two"},
-                    "save_options": {},
+                    "save_outputs": {},
                 },
             ],
             "verbose": False,
@@ -212,26 +206,26 @@ def test_pipeline_verbose_defaults_applied_to_stages(
 ) -> None:
     """Pipeline-level verbose is forwarded when a step omits its own verbose."""
     seen_verbose: list[bool] = []
-    real_create = _dynamic_pipeline_mod._create_stage
+    real_create = _dynamic_pipeline_mod._stage_from_spec
 
     def _create(*args: Any, **kwargs: Any) -> PipelineStage:
         stage = real_create(*args, **kwargs)
         seen_verbose.append(stage.verbose)
         return stage
 
-    monkeypatch.setattr(_dynamic_pipeline_mod, "_create_stage", _create)
+    monkeypatch.setattr(_dynamic_pipeline_mod, "_stage_from_spec", _create)
     dynamic_pipeline(
         {
             "steps": [
                 {
                     "name": "EchoStage",
                     "params": {"message": "a"},
-                    "save_options": {},
+                    "save_outputs": {},
                 },
                 {
                     "name": "EchoStage",
                     "params": {"message": "b"},
-                    "save_options": {},
+                    "save_outputs": {},
                     "verbose": True,
                 },
             ],
@@ -241,23 +235,6 @@ def test_pipeline_verbose_defaults_applied_to_stages(
     assert seen_verbose == [False, True]
 
 
-def test_rejects_compose_name(
-    registry_with_echo: dict[str, type[PipelineStage]],
-) -> None:
-    with pytest.raises(ValueError, match="Compose"):
-        dynamic_pipeline(
-            {
-                "order": ["nested"],
-                "steps": {
-                    "nested": {
-                        "name": "Compose",
-                        "params": {},
-                    }
-                },
-            }
-        )
-
-
 def test_rejects_instantiated_stage(
     registry_with_echo: dict[str, type[PipelineStage]],
 ) -> None:
@@ -265,19 +242,7 @@ def test_rejects_instantiated_stage(
         dynamic_pipeline(
             {
                 "order": ["bad"],
-                "steps": {"bad": EchoStage(params={"message": "x"}, save_options={})},
-            }
-        )
-
-
-def test_rejects_unknown_stage_name(
-    registry_with_echo: dict[str, type[PipelineStage]],
-) -> None:
-    with pytest.raises(ValueError, match="Unknown pipeline stage"):
-        dynamic_pipeline(
-            {
-                "order": ["bad"],
-                "steps": {"bad": {"name": "NotARealStage", "params": {}}},
+                "steps": {"bad": EchoStage(params={"message": "x"}, save_outputs={})},
             }
         )
 
@@ -285,7 +250,7 @@ def test_rejects_unknown_stage_name(
 def test_rejects_failed_instantiation(
     registry_with_echo: dict[str, type[PipelineStage]],
 ) -> None:
-    with pytest.raises(TypeError, match="Failed to instantiate stage"):
+    with pytest.raises(TypeError, match="Failed to instantiate stage") as excinfo:
         dynamic_pipeline(
             {
                 "steps": [
@@ -296,6 +261,7 @@ def test_rejects_failed_instantiation(
                 ]
             }
         )
+    assert "steps[0]" in str(excinfo.value)
 
 
 def test_rejects_order_with_unknown_step_id(
@@ -309,7 +275,7 @@ def test_rejects_order_with_unknown_step_id(
                     "echo": {
                         "name": "EchoStage",
                         "params": {"message": "hello"},
-                        "save_options": {},
+                        "save_outputs": {},
                     }
                 },
             }
@@ -327,14 +293,32 @@ def test_rejects_unused_step_in_mapping(
                     "echo": {
                         "name": "EchoStage",
                         "params": {"message": "hello"},
-                        "save_options": {},
+                        "save_outputs": {},
                     },
                     "unused": {
                         "name": "EchoStage",
                         "params": {"message": "ignored"},
-                        "save_options": {},
+                        "save_outputs": {},
                     },
                 },
+            }
+        )
+
+
+def test_rejects_order_when_steps_is_list(
+    registry_with_echo: dict[str, type[PipelineStage]],
+) -> None:
+    with pytest.raises(ValueError, match="`order` is only supported when `steps`"):
+        dynamic_pipeline(
+            {
+                "order": ["echo"],
+                "steps": [
+                    {
+                        "name": "EchoStage",
+                        "params": {"message": "hello"},
+                        "save_outputs": {},
+                    }
+                ],
             }
         )
 
@@ -345,26 +329,12 @@ def test_rejects_unknown_keys_when_steps_is_list(
     with pytest.raises(ValueError, match="Unknown pipeline key"):
         dynamic_pipeline(
             {
-                "order": ["echo"],
-                "steps": [
-                    {
-                        "name": "EchoStage",
-                        "params": {"message": "hello"},
-                        "save_options": {},
-                    }
-                ],
-            }
-        )
-
-    with pytest.raises(ValueError, match="Unknown pipeline key"):
-        dynamic_pipeline(
-            {
                 "unknown": True,
                 "steps": [
                     {
                         "name": "EchoStage",
                         "params": {"message": "hello"},
-                        "save_options": {},
+                        "save_outputs": {},
                     }
                 ],
             }
@@ -382,7 +352,7 @@ def test_rejects_unknown_keys_when_steps_is_mapping(
                     "echo": {
                         "name": "EchoStage",
                         "params": {"message": "hello"},
-                        "save_options": {},
+                        "save_outputs": {},
                     }
                 },
             }

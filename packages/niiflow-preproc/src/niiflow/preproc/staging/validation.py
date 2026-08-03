@@ -62,12 +62,17 @@ def check_allowed_keys(
         )
 
 
-def validate_pointers(pointers: dict[str, PointerKind]) -> dict[str, PointerKind]:
+def validate_pointers(
+    pointers: dict[str, PointerKind] | None,
+) -> dict[str, PointerKind]:
     """Validate and return a copy of the pointer mapping for :class:`FileStager`.
 
     Each key must be a dotted parameter path string; each value must be ``"input"`` or
-    ``"output"``.
+    ``"output"``. ``None`` is accepted and normalised to an empty mapping, which stages
+    dynamic references without resolving any file pointers.
     """
+    if pointers is None:
+        return {}
     if not isinstance(pointers, dict):
         raise TypeError(
             f"pointers must be a dictionary, got {type(pointers).__name__}."

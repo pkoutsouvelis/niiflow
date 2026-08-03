@@ -37,9 +37,13 @@ class Compose(PipelineStage):
         stages: Ordered sequence of child stages.
         step_ids: Optional per-stage ids aligned with ``stages``. When omitted,
             every slot defaults to ``None`` (auto-generated ids at run time).
+            Explicit ids must be unique; duplicates are rejected here rather than
+            when the offending child runs. Auto-generated and nested ids can only
+            be checked at run time, so :meth:`PipelineStage.run` still guards
+            against collisions.
         params: present for :class:`PipelineStage` but not supported;
             pass them on each child stage.
-        save_options: present for :class:`PipelineStage` but not supported;
+        save_outputs: present for :class:`PipelineStage` but not supported;
             pass them on each child stage.
         verbose: Whether informational log messages are emitted.
     """
@@ -50,7 +54,7 @@ class Compose(PipelineStage):
         *,
         step_ids: Sequence[str | None] | None = None,
         params: dict[str, Any] | None = None,
-        save_options: dict[str, Any] | None = None,
+        save_outputs: dict[str, Any] | None = None,
         verbose: bool = True,
     ) -> None:
         if params:
@@ -58,9 +62,9 @@ class Compose(PipelineStage):
                 f"{type(self).__name__} does not accept `params`; configure each child "
                 "stage directly."
             )
-        if save_options:
+        if save_outputs:
             raise ValueError(
-                f"{type(self).__name__} does not accept `save_options`; configure each "
+                f"{type(self).__name__} does not accept `save_outputs`; configure each "
                 "child stage directly."
             )
         super().__init__(verbose=verbose)
@@ -80,7 +84,10 @@ class Compose(PipelineStage):
         *,
         step_ids: Sequence[str | None] | None = None,
     ) -> None:
-        """Replace child stages and step ids."""
+        """Replace child stages and step ids.
+
+        Explicit (non-``None``) step ids must be unique across ``step_ids``.
+        """
         if stages is None:
             normalized_stages: tuple[PipelineStage, ...] = ()
         else:
@@ -115,6 +122,7 @@ class Compose(PipelineStage):
                     f"`stages` length ({len(normalized_stages)})"
                 )
             ids: list[str | None] = []
+            first_seen: dict[str, int] = {}
             for index, step_id in enumerate(step_ids):
                 if step_id is None:
                     ids.append(None)
@@ -124,6 +132,13 @@ class Compose(PipelineStage):
                         f"step id at index {index} must be a non-empty string "
                         f"or None, got {step_id!r}"
                     )
+                if step_id in first_seen:
+                    raise ValueError(
+                        f"step id {step_id!r} at index {index} duplicates index "
+                        f"{first_seen[step_id]}; step ids must be unique within a "
+                        f"pipeline."
+                    )
+                first_seen[step_id] = index
                 ids.append(step_id)
             normalized_step_ids = tuple(ids)
 
@@ -133,7 +148,8 @@ class Compose(PipelineStage):
     def _resolve_stage_entries(
         self, parent_step_id: str | None
     ) -> list[tuple[str | None, PipelineStage]]:
-        """Resolve stage entries as (step_id, stage) tuples."""
+        """Resolve stage entries as (step_id, stage) tuples, taking into account of the
+        parent step id."""
         entries: list[tuple[str | None, PipelineStage]] = []
         for index, (stage, step_id) in enumerate(zip(self.stages, self.step_ids)):
             if step_id is not None:
@@ -186,6 +202,34 @@ class Compose(PipelineStage):
             "`save_output` is not used."
         )
 
+    @staticmethod
+    def _resolve_bounds(start: int, end: int | None, count: int) -> tuple[int, int]:
+        """Normalize negative ``start`` / ``end`` and validate the resolved range."""
+        if not isinstance(start, int) or isinstance(start, bool):
+            raise TypeError(f"`start` must be an int, got {type(start).__name__}")
+        if end is not None and (not isinstance(end, int) or isinstance(end, bool)):
+            raise TypeError(f"`end` must be an int or None, got {type(end).__name__}")
+
+        start_index = start + count if start < 0 else start
+        end_index = count if end is None else (end + count if end < 0 else end)
+
+        if not 0 <= start_index <= count:
+            raise ValueError(
+                f"`start` {start!r} is out of range for {count} stage(s); resolved "
+                f"to index {start_index}, expected 0..{count}"
+            )
+        if not 0 <= end_index <= count:
+            raise ValueError(
+                f"`end` {end!r} is out of range for {count} stage(s); resolved to "
+                f"index {end_index}, expected 0..{count}"
+            )
+        if end_index < start_index:
+            raise ValueError(
+                f"`end` {end!r} (resolved index {end_index}) must not precede "
+                f"`start` {start!r} (resolved index {start_index})"
+            )
+        return start_index, end_index
+
     def run(
         self,
         ctx: RuntimeContext | None = None,
@@ -195,7 +239,7 @@ class Compose(PipelineStage):
     ) -> RuntimeContext:
         """Execute child stages sequentially and return the updated context.
 
-        The returned context is the same object throughout — artifacts, metadata,
+        The returned context is the same object throughout — outputs, metadata,
         and ``steps_completed`` accumulate **flat**, as if the children had been
         invoked directly in sequence rather than grouped under :class:`Compose`.
 
@@ -207,6 +251,11 @@ class Compose(PipelineStage):
 
         When ``ctx.step_id`` is set at :meth:`run` entry, bare stages (``step_ids``
         slot ``None``) receive ``{ctx.step_id}.{index}`` ids.
+
+        Both bounds may be negative, counting back from the end of the pipeline as
+        Python indexing does: ``start=-2`` runs the last two stages and ``end=-1``
+        runs everything but the last. Unlike plain slicing, out-of-range bounds
+        raise instead of silently selecting fewer stages than requested.
 
         Args:
             ctx: runtime context threaded through each child stage.
@@ -221,11 +270,6 @@ class Compose(PipelineStage):
                 f"`ctx` must be a RuntimeContext or None, got {type(ctx).__name__}"
             )
 
-        if not isinstance(start, int) or start < 0:
-            raise ValueError(f"`start` must be a non-negative int, got {start!r}")
-        if end is not None and (not isinstance(end, int) or end < start):
-            raise ValueError(f"`end` must be an int >= `start` ({start}), got {end!r}")
-
         parent_step_id = ctx.step_id
         if parent_step_id is not None and (
             not isinstance(parent_step_id, str) or not parent_step_id
@@ -235,13 +279,14 @@ class Compose(PipelineStage):
             )
 
         entries = self._resolve_stage_entries(parent_step_id)
-        selected = entries[start:end]
+        start_index, end_index = self._resolve_bounds(start, end, len(entries))
+        selected = entries[start_index:end_index]
 
         name = type(self).__name__
         if selected:
             self.log(
                 f"[Stage {name}] Running {len(selected)} nested stage(s) "
-                f"[{start}:{end if end is not None else len(entries)}]..."
+                f"[{start_index}:{end_index}]..."
             )
 
         for step_id, stage in selected:

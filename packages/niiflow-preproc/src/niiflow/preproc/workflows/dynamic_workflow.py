@@ -143,12 +143,15 @@ def dynamic_workflow(
     from_plan: Path | str | None = None,
     plan_only: bool = False,
     dry_run: bool = False,
-) -> RunPlan:
+) -> None:
     """Instantiate and execute a :class:`DynamicPreprocessingWorkflow`.
 
     This is the orchestration entry point for scripts and higher-level drivers,
     analogous to :func:`~niiflow.preproc.pipelines.dynamic_pipeline`. The workflow
-    class itself stays limited to ``plan`` / ``run_plan`` / ``run``.
+    class itself stays limited to ``plan`` / ``run_plan`` / ``run``. Persist plans
+    with ``save_plan_to`` and reload via ``from_plan`` (or
+    :meth:`~niiflow.preproc.workflows.plan.RunPlan.load`) when you need the plan
+    object; this driver does not return it.
 
     Modes (checked in order):
 
@@ -167,7 +170,7 @@ def dynamic_workflow(
     Args:
         settings: Keyword arguments forwarded to
             :class:`DynamicPreprocessingWorkflow`. Required unless ``from_plan``
-            is set; must include non-None ``pipeline_params`` for planning modes.
+            is set; must include non-None ``pipeline_params`` for generating the plan.
             When ``from_plan`` is set, may be omitted (treated as ``{}``) and any
             ``pipeline_params`` entry is cleared to ``None``.
         inputs: Run inputs for planning modes. Required unless ``from_plan`` is set.
@@ -177,9 +180,6 @@ def dynamic_workflow(
         plan_only: When ``True``, stop after planning (do not execute).
         dry_run: When ``True``, print the plan via :meth:`RunPlan.view` and do not
             save or execute.
-
-    Returns:
-        The built or loaded :class:`~niiflow.preproc.workflows.plan.RunPlan`.
 
     Raises:
         ValueError: If mode arguments conflict or required ``settings`` / ``inputs``
@@ -229,7 +229,7 @@ def dynamic_workflow(
             print(run_plan.view())
         else:
             workflow.run_plan(run_plan)
-        return run_plan
+        return
 
     if settings is None:
         raise ValueError("`settings` is required unless `from_plan` is set")
@@ -260,4 +260,3 @@ def dynamic_workflow(
         print(run_plan.view())
     elif not plan_only:
         workflow.run_plan(run_plan)
-    return run_plan

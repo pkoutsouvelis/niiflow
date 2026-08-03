@@ -9,59 +9,31 @@ __all__ = [
 import inspect
 from typing import Any
 
-import niiflow.preproc.pipelines.pipeline_stages as pipeline_stages
 from niiflow.preproc.pipelines.pipeline_stages import (
     Compose,
     PipelineStage,
     RuntimeContext,
+    create_stage,
+    discover_stage_classes,
 )
 
 _VALID_PIPELINE_KEYS_LIST = frozenset({"steps", "verbose"})
 _VALID_PIPELINE_KEYS_MAPPING = frozenset({"steps", "order", "verbose"})
 
 
-def _discover_stage_classes() -> dict[str, type[PipelineStage]]:
-    """Return concrete :class:`PipelineStage` types keyed by class name.
-
-    Scans :mod:`niiflow.preproc.pipelines.pipeline_stages` and excludes the abstract
-    base :class:`PipelineStage` and :class:`Compose`.
-    """
-    registry: dict[str, type[PipelineStage]] = {}
-    for name, obj in inspect.getmembers(pipeline_stages, inspect.isclass):
-        if obj is PipelineStage or obj is Compose:
-            continue
-        if not issubclass(obj, PipelineStage):
-            continue
-        registry[name] = obj
-    return registry
-
-
-def _resolve_stage_class(
-    name: str, registry: dict[str, type[PipelineStage]]
-) -> type[PipelineStage]:
-    if not isinstance(name, str) or not name:
-        raise ValueError(f"Step `name` must be a non-empty string, got {name!r}.")
-    if name == "Compose":
-        raise ValueError(
-            "`Compose` cannot be built from pipeline config; list steps "
-            "explicitly or call `Compose()` directly."
-        )
-    try:
-        return registry[name]
-    except KeyError as exc:
-        raise ValueError(
-            f"Unknown pipeline stage {name!r}; expected one of {sorted(registry)}."
-        ) from exc
-
-
-def _create_stage(
+def _stage_from_spec(
     step_label: str,
     step_spec: Any,
     *,
     registry: dict[str, type[PipelineStage]],
     default_verbose: bool,
 ) -> PipelineStage:
-    """Instantiate a :class:`PipelineStage` from a step specification."""
+    """Instantiate a :class:`PipelineStage` from a step specification.
+
+    Validates the step-spec shape — the config format owned by this module — then
+    delegates class lookup and construction to
+    :func:`~niiflow.preproc.pipelines.pipeline_stages.create_stage`.
+    """
     if isinstance(step_spec, PipelineStage):
         raise TypeError(
             f"Step {step_label!r} must be a configuration dictionary, not an "
@@ -75,23 +47,19 @@ def _create_stage(
     if "name" not in step_spec:
         raise ValueError(f"Step {step_label!r} is missing required key 'name'.")
 
-    stage_cls = _resolve_stage_class(step_spec["name"], registry)
+    stage_name = step_spec["name"]
+    stage_kwargs = {key: value for key, value in step_spec.items() if key != "name"}
 
-    init_kwargs = {key: value for key, value in step_spec.items() if key != "name"}
-
-    sig = inspect.signature(stage_cls.__init__)
-    if "verbose" in sig.parameters and "verbose" not in init_kwargs:
-        init_kwargs["verbose"] = default_verbose
+    stage_cls = registry.get(stage_name) if isinstance(stage_name, str) else None
+    if stage_cls is not None:
+        sig = inspect.signature(stage_cls.__init__)
+        if "verbose" in sig.parameters and "verbose" not in stage_kwargs:
+            stage_kwargs["verbose"] = default_verbose
 
     try:
-        bound = sig.bind_partial(**init_kwargs)
-        bound.apply_defaults()
-        return stage_cls(*bound.args, **bound.kwargs)
+        return create_stage(stage_name, stage_kwargs, registry=registry)
     except TypeError as exc:
-        raise TypeError(
-            f"Failed to instantiate stage {step_spec['name']!r} for step "
-            f"{step_label!r}: {exc}"
-        ) from exc
+        raise TypeError(f"{exc} (step {step_label!r})") from exc
 
 
 def _normalize_pipeline(
@@ -107,6 +75,11 @@ def _normalize_pipeline(
 
     steps_raw = pipeline["steps"]
     if isinstance(steps_raw, list):
+        if "order" in pipeline:
+            raise ValueError(
+                "`order` is only supported when `steps` is a mapping; a list of "
+                "steps already defines execution order by position."
+            )
         unknown = sorted(set(pipeline) - _VALID_PIPELINE_KEYS_LIST)
         if unknown:
             raise ValueError(
@@ -210,10 +183,10 @@ def dynamic_pipeline(pipeline_spec: dict[str, Any], run_id: str | None = None) -
         )
 
     steps, step_ids = _normalize_pipeline(pipeline_spec)
-    registry = _discover_stage_classes()
+    registry = discover_stage_classes()
 
     built = [
-        _create_stage(
+        _stage_from_spec(
             step_label,
             step_spec,
             registry=registry,

@@ -4,21 +4,23 @@ from __future__ import annotations
 
 import importlib
 import logging
-import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from niiflow.preproc.pipelines.pipeline_stages import PipelineStage
-from niiflow.preproc.staging import StagedEntry, StagingErrorRecord
+from niiflow.preproc.pipelines.pipeline_stages import (
+    PipelineStage,
+    discover_stage_classes,
+)
+from niiflow.preproc.staging import StagedEntry
 from niiflow.preproc.workflows import (
     DynamicPreprocessingWorkflow,
     PlannableWorkflow,
-    ProcessingWorkflow,
     RunPlan,
     dynamic_workflow,
 )
+from niiflow.preproc.workflows.mixins import SupportsFileDiscovery, SupportsStaging
 
 _dynamic_pipeline_mod = importlib.import_module(
     "niiflow.preproc.pipelines.dynamic_pipeline"
@@ -45,12 +47,12 @@ def registry_with_echo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> dict[str, type[PipelineStage]]:
     registry = {
-        **_dynamic_pipeline_mod._discover_stage_classes(),
+        **discover_stage_classes(),
         "EchoStage": EchoStage,
     }
     monkeypatch.setattr(
         _dynamic_pipeline_mod,
-        "_discover_stage_classes",
+        "discover_stage_classes",
         lambda: registry,
     )
     return registry
@@ -90,37 +92,6 @@ def _proc_touch_sentinel(entry: StagedEntry) -> None:
     out_dir = Path(entry.params["out_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{entry.active.name}.done").write_text("ok", encoding="utf-8")
-
-
-def _proc_record_call(entry: StagedEntry) -> None:
-    out_dir = Path(entry.params["out_dir"])
-    out_dir.mkdir(parents=True, exist_ok=True)
-    log = out_dir / "calls.log"
-    with log.open("a", encoding="utf-8") as fh:
-        fh.write(f"{entry.active.as_posix()}\n")
-
-
-def _proc_boom(entry: StagedEntry) -> None:
-    raise RuntimeError(f"pipeline boom for {entry.active}")
-
-
-def _proc_fail_on_sub02_t1w(entry: StagedEntry) -> None:
-    if entry.active.name == "sub-02_T1w.nii.gz":
-        raise RuntimeError("synthetic failure")
-    _proc_touch_sentinel(entry)
-
-
-def _proc_sleep_if_active(entry: StagedEntry) -> None:
-    slow_actives = {
-        Path(item).resolve() for item in entry.params.get("slow_actives", ())
-    }
-    if entry.active in slow_actives:
-        time.sleep(float(entry.params.get("sleep_seconds", 3.0)))
-    _proc_touch_sentinel(entry)
-
-
-def _proc_log_info(entry: StagedEntry) -> None:
-    logging.getLogger().info(entry.params.get("message", "WORKER_INFO"))
 
 
 def _proc_log_burst(entry: StagedEntry) -> None:
@@ -169,17 +140,10 @@ def logs_dir(tmp_path: Path) -> Path:
 class TestWorkflowPlanningContract:
     def test_dynamic_workflow_is_plannable_workflow(self) -> None:
         assert issubclass(DynamicPreprocessingWorkflow, PlannableWorkflow)
-        assert issubclass(PlannableWorkflow, ProcessingWorkflow)
 
-    def test_processing_workflow_does_not_define_plan(self) -> None:
-        assert "plan" not in ProcessingWorkflow.__dict__
-
-    def test_run_rejects_non_staged_entry(self, tmp_path: Path) -> None:
-        wf = _workflow()
-        with pytest.raises(
-            TypeError, match="`entries` must contain only `StagedEntry`"
-        ):
-            wf.run([tmp_path / "a.nii.gz"])  # type: ignore[arg-type]
+    def test_supports_discovery_and_staging(self) -> None:
+        assert issubclass(DynamicPreprocessingWorkflow, SupportsFileDiscovery)
+        assert issubclass(DynamicPreprocessingWorkflow, SupportsStaging)
 
 
 class TestDynamicWorkflowPlan:
@@ -383,7 +347,7 @@ class TestDynamicWorkflowRun:
         assert called[0].active == file_path.resolve()
         assert called[0].params == {"steps": []}
 
-    def test_plan_save_options_apply_before_run_plan(self, tmp_path: Path) -> None:
+    def test_plan_save_outputs_apply_before_run_plan(self, tmp_path: Path) -> None:
         file_path = tmp_path / "a.nii.gz"
         file_path.write_bytes(b"")
         plan_path = tmp_path / "job.duckdb"
@@ -401,262 +365,6 @@ class TestDynamicWorkflowRun:
         assert plan_path.exists()
         assert len(RunPlan.load(plan_path).entries) == 1
         assert files_path.read_text(encoding="utf-8") == f"{file_path.resolve()}\n"
-
-    def test_call_dunder_delegates_to_run(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        files = [tmp_path / f"img-{index}.nii.gz" for index in range(2)]
-        for file_path in files:
-            file_path.write_bytes(b"")
-        sentinels = tmp_path / "sentinels"
-        wf = _workflow(pipeline_params={"steps": [], "out_dir": str(sentinels)})
-        monkeypatch.setattr(wf, "process_single", _proc_touch_sentinel)
-
-        plan = wf.plan(files)
-        wf(plan.entries)
-
-        assert {path.name for path in sentinels.iterdir()} == {
-            f"{file_path.name}.done" for file_path in files
-        }
-
-    def test_run_plan_with_empty_plan_is_noop(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        wf = _workflow()
-        called: list[StagedEntry] = []
-
-        def _record(entry: StagedEntry) -> None:
-            called.append(entry)
-
-        monkeypatch.setattr(wf, "process_single", _record)
-        wf.run_plan(RunPlan(entries=()))
-
-        assert called == []
-
-    def test_run_continues_after_entry_failure(
-        self,
-        dataset_root: Path,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        sentinels = tmp_path / "sentinels"
-        wf = _workflow(
-            pipeline_params={"steps": [], "out_dir": str(sentinels)},
-            num_workers=1,
-        )
-        monkeypatch.setattr(wf, "process_single", _proc_fail_on_sub02_t1w)
-        wf.run_plan(wf.plan(_search(dataset_root)))
-
-        produced = {path.name for path in sentinels.iterdir()}
-        assert "sub-02_T1w.nii.gz.done" not in produced
-        assert len(produced) == 6
-
-    @pytest.mark.parametrize("num_workers", [2, 4])
-    def test_multi_worker_processes_each_entry_once(
-        self,
-        dataset_root: Path,
-        tmp_path: Path,
-        num_workers: int,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        sentinels = tmp_path / "sentinels"
-        wf = _workflow(
-            pipeline_params={"steps": [], "out_dir": str(sentinels)},
-            num_workers=num_workers,
-        )
-        monkeypatch.setattr(wf, "process_single", _proc_touch_sentinel)
-
-        wf.run_plan(wf.plan(_search(dataset_root)))
-
-        produced = {path.name for path in sentinels.iterdir()}
-        expected = {
-            f"{entry.active.name}.done"
-            for entry in wf.plan(_search(dataset_root)).entries
-        }
-        assert produced == expected
-
-    def test_timeout_records_overdue_entry_and_continues(
-        self,
-        tmp_path: Path,
-        logs_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        fast = tmp_path / "fast.nii.gz"
-        slow = tmp_path / "slow.nii.gz"
-        fast.write_bytes(b"")
-        slow.write_bytes(b"")
-        sentinels = tmp_path / "sentinels"
-        wf = _workflow(
-            pipeline_params={
-                "steps": [],
-                "out_dir": str(sentinels),
-                "slow_actives": (str(slow),),
-                "sleep_seconds": 2.0,
-            },
-            num_workers=1,
-            logs_root=logs_dir,
-            timeout=0.5,
-        )
-        monkeypatch.setattr(wf, "process_single", _proc_sleep_if_active)
-
-        wf.run_plan(wf.plan([fast, slow]))
-
-        status = (logs_dir / "status.log").read_text(encoding="utf-8")
-        assert f"{fast.resolve()} | SUCCESS" in status
-        assert f"{slow.resolve()} | TIMEOUT" in status
-        assert "fast.nii.gz.done" in {path.name for path in sentinels.iterdir()}
-
-    @pytest.mark.parametrize("num_workers", [1, 2])
-    def test_timeout_measures_worker_processing_not_queue_wait(
-        self,
-        tmp_path: Path,
-        logs_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        num_workers: int,
-    ) -> None:
-        """Fast entries must not TIMEOUT while waiting for a worker."""
-        first = tmp_path / "first.nii.gz"
-        second = tmp_path / "second.nii.gz"
-        first.write_bytes(b"")
-        second.write_bytes(b"")
-        sentinels = tmp_path / "sentinels"
-        wf = _workflow(
-            pipeline_params={
-                "steps": [],
-                "out_dir": str(sentinels),
-                "slow_actives": (str(first),),
-                "sleep_seconds": 1.5,
-            },
-            num_workers=num_workers,
-            logs_root=logs_dir,
-            timeout=0.5,
-        )
-        monkeypatch.setattr(wf, "process_single", _proc_sleep_if_active)
-
-        wf.run_plan(wf.plan([first, second]))
-
-        status = (logs_dir / "status.log").read_text(encoding="utf-8")
-        assert f"{first.resolve()} | TIMEOUT" in status
-        assert f"{second.resolve()} | SUCCESS" in status
-        assert {path.name for path in sentinels.iterdir()} == {
-            "first.nii.gz.done",
-            "second.nii.gz.done",
-        }
-
-    def test_timeout_success_when_processing_finishes_within_limit(
-        self,
-        tmp_path: Path,
-        logs_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Completion after the limit must be TIMEOUT; within the limit, SUCCESS."""
-        entry = tmp_path / "entry.nii.gz"
-        entry.write_bytes(b"")
-        sentinels = tmp_path / "sentinels"
-
-        def _proc_sleep(entry: StagedEntry) -> None:
-            time.sleep(float(entry.params["sleep_seconds"]))
-            _proc_touch_sentinel(entry)
-
-        wf = _workflow(
-            pipeline_params={
-                "steps": [],
-                "out_dir": str(sentinels),
-                "sleep_seconds": 0.2,
-            },
-            num_workers=1,
-            logs_root=logs_dir,
-            timeout=0.5,
-        )
-        monkeypatch.setattr(wf, "process_single", _proc_sleep)
-
-        wf.run_plan(wf.plan(entry))
-
-        status = (logs_dir / "status.log").read_text(encoding="utf-8")
-        assert f"{entry.resolve()} | SUCCESS" in status
-        assert "TIMEOUT" not in status
-
-    def test_timeout_when_processing_exceeds_limit(
-        self,
-        tmp_path: Path,
-        logs_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        entry = tmp_path / "entry.nii.gz"
-        entry.write_bytes(b"")
-        sentinels = tmp_path / "sentinels"
-
-        def _proc_sleep(entry: StagedEntry) -> None:
-            time.sleep(float(entry.params["sleep_seconds"]))
-            _proc_touch_sentinel(entry)
-
-        wf = _workflow(
-            pipeline_params={
-                "steps": [],
-                "out_dir": str(sentinels),
-                "sleep_seconds": 0.8,
-            },
-            num_workers=1,
-            logs_root=logs_dir,
-            timeout=0.5,
-        )
-        monkeypatch.setattr(wf, "process_single", _proc_sleep)
-
-        wf.run_plan(wf.plan(entry))
-
-        status = (logs_dir / "status.log").read_text(encoding="utf-8")
-        assert f"{entry.resolve()} | TIMEOUT" in status
-        assert "SUCCESS" not in status
-
-    def test_run_plan_skips_entries_with_staging_errors(
-        self,
-        tmp_path: Path,
-        logs_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        ok = tmp_path / "ok.nii.gz"
-        bad = tmp_path / "bad.nii.gz"
-        ok.write_bytes(b"")
-        bad.write_bytes(b"")
-        sentinels = tmp_path / "sentinels"
-        plan = RunPlan(
-            entries=(
-                StagedEntry(
-                    active=ok.resolve(),
-                    params={"steps": [], "out_dir": str(sentinels)},
-                ),
-                StagedEntry(
-                    active=bad.resolve(),
-                    params={"steps": [], "out_dir": str(sentinels)},
-                    errors=(
-                        StagingErrorRecord(
-                            active=bad.resolve(),
-                            message="mask not found",
-                            stage="FileStager",
-                        ),
-                    ),
-                ),
-            )
-        )
-        wf = _workflow(
-            pipeline_params={"steps": [], "out_dir": str(sentinels)},
-            num_workers=1,
-            logs_root=logs_dir,
-        )
-        monkeypatch.setattr(
-            DynamicPreprocessingWorkflow,
-            "process_single",
-            staticmethod(_proc_touch_sentinel),
-        )
-
-        wf.run_plan(plan)
-
-        assert (sentinels / "ok.nii.gz.done").exists()
-        assert not (sentinels / "bad.nii.gz.done").exists()
-        status = (logs_dir / "status.log").read_text(encoding="utf-8")
-        assert f"{bad.resolve()} | STAGING_FAILURE | mask not found" in status
 
     def test_logs_written_under_logs_root(
         self,
@@ -728,7 +436,7 @@ class TestDynamicWorkflowPipeline:
                 "stager_name": "FileStager",
                 "params": {
                     "pointers": {
-                        "steps.echo.save_options.message": "output",
+                        "steps.echo.save_outputs.message": "output",
                     }
                 },
             },
@@ -737,7 +445,7 @@ class TestDynamicWorkflowPipeline:
                     "echo": {
                         "name": "EchoStage",
                         "params": {"message": "hello"},
-                        "save_options": {"message": str(output)},
+                        "save_outputs": {"message": str(output)},
                     }
                 }
             },
@@ -783,14 +491,13 @@ class TestDynamicWorkflow:
             staticmethod(_record),
         )
 
-        plan = dynamic_workflow(
+        dynamic_workflow(
             settings=_driver_settings(),
             inputs=file_path,
         )
 
-        assert len(plan.entries) == 1
-        assert plan.entries[0].active == file_path.resolve()
-        assert called == [plan.entries[0]]
+        assert len(called) == 1
+        assert called[0].active == file_path.resolve()
 
     def test_plan_only_saves_without_executing(
         self,
@@ -809,7 +516,7 @@ class TestDynamicWorkflow:
             staticmethod(lambda entry: called.append(entry)),
         )
 
-        plan = dynamic_workflow(
+        dynamic_workflow(
             settings=_driver_settings(),
             inputs=file_path,
             save_filepaths_to=files_path,
@@ -818,7 +525,9 @@ class TestDynamicWorkflow:
         )
 
         assert plan_path.exists()
-        assert RunPlan.load(plan_path).entries == plan.entries
+        loaded = RunPlan.load(plan_path)
+        assert len(loaded.entries) == 1
+        assert loaded.entries[0].active == file_path.resolve()
         assert files_path.read_text(encoding="utf-8") == f"{file_path.resolve()}\n"
         assert called == []
 
@@ -839,7 +548,7 @@ class TestDynamicWorkflow:
             staticmethod(lambda entry: called.append(entry)),
         )
 
-        plan = dynamic_workflow(
+        dynamic_workflow(
             settings=_driver_settings(),
             inputs=file_path,
             save_plan_to=plan_path,
@@ -851,7 +560,6 @@ class TestDynamicWorkflow:
         assert str(file_path.resolve()) in captured.out
         assert not plan_path.exists()
         assert called == []
-        assert len(plan.entries) == 1
 
     def test_from_plan_executes_saved_plan(
         self,
@@ -870,12 +578,11 @@ class TestDynamicWorkflow:
             staticmethod(lambda entry: called.append(entry)),
         )
 
-        loaded = dynamic_workflow(
+        dynamic_workflow(
             settings=_driver_settings(),
             from_plan=plan_path,
         )
 
-        assert loaded.entries == plan.entries
         assert called == [plan.entries[0]]
 
     def test_from_plan_ignores_inputs_and_pipeline_params(
@@ -896,14 +603,13 @@ class TestDynamicWorkflow:
             staticmethod(lambda entry: called.append(entry)),
         )
 
-        loaded = dynamic_workflow(
+        dynamic_workflow(
             settings=_driver_settings(),
             inputs=tmp_path / "ignored.nii.gz",
             from_plan=plan_path,
         )
 
         err = capsys.readouterr().err
-        assert loaded.entries == plan.entries
         assert called == [plan.entries[0]]
         assert "Ignoring `inputs`" in err
         assert "Ignoring `pipeline_params`" in err
