@@ -12,15 +12,28 @@ from __future__ import annotations
 __all__ = [
     "ants_apply_transforms",
     "ants_registration",
+    "ants_similarity_metrics",
 ]
 
+from collections.abc import Sequence
 from typing import Any
 
+from ants import image_physical_space_consistency, image_similarity
 from ants.core import ANTsImage
 from ants.registration import registration
 from ants.registration import apply_transforms
 
 from .utils import ensure_ants_image, reject_reserved_kwargs
+
+# User-facing metric names -> ANTs ``image_similarity`` metric_type.
+# ANTs returns dissimilarities (lower/more-negative is better); we negate so
+# that every exposed score uses higher-is-better semantics.
+_SIMILARITY_METRICS: dict[str, str] = {
+    "correlation": "Correlation",
+    "mattes_mutual_information": "MattesMutualInformation",
+    "neighborhood_correlation": "ANTSNeighborhoodCorrelation",
+}
+_DEFAULT_SIMILARITY_METRICS: tuple[str, ...] = tuple(_SIMILARITY_METRICS)
 
 
 def ants_apply_transforms(
@@ -140,3 +153,102 @@ def ants_registration(
         interpolator=interpolation,
     )
     return warped, result
+
+
+def _ensure_compatible_space(
+    image: ANTsImage,
+    target: ANTsImage,
+    mask: ANTsImage | None = None,
+) -> None:
+    """Require ``image``, ``target``, and optional ``mask`` to share physical space."""
+    ensure_ants_image(image)
+    ensure_ants_image(target, name="target")
+    others: list[tuple[str, ANTsImage]] = [("target", target)]
+    if mask is not None:
+        ensure_ants_image(mask, name="mask")
+        others.append(("mask", mask))
+    for name, other in others:
+        if other.shape != image.shape:
+            raise ValueError(
+                f"`{name}` shape {tuple(other.shape)} is incompatible with "
+                f"`image` shape {tuple(image.shape)}; resample explicitly "
+                "before computing similarity metrics"
+            )
+        if not image_physical_space_consistency(image, other):
+            raise ValueError(
+                f"`{name}` is not in the same physical space as `image`; "
+                "resample explicitly before computing similarity metrics"
+            )
+
+
+def ants_similarity_metrics(
+    image: ANTsImage,
+    target: ANTsImage,
+    mask: ANTsImage | None = None,
+    metrics: Sequence[str] | None = None,
+) -> dict[str, float]:
+    """Compute image similarity scores (higher is better), typically useful for
+    registration quality control.
+
+    Wraps :func:`ants.image_similarity` for the requested metrics. When ``mask``
+    is provided, sampling is restricted to that mask on both images. ANTs returns
+    dissimilarities for these metrics; each score is negated so callers can apply
+    ``score >= cutoff`` thresholds uniformly.
+
+    Args:
+        image:
+            Moving :class:`ants.core.ANTsImage` (already in ``target`` space).
+        target:
+            Fixed/target :class:`ants.core.ANTsImage`.
+        mask:
+            Optional binary (or weighted) mask in the same physical space as
+            ``image`` and ``target``. When set, metric evaluation is restricted
+            to this mask; when ``None``, the full image is used.
+        metrics:
+            Subset of ``correlation``, ``mattes_mutual_information``, and
+            ``neighborhood_correlation``. Defaults to all three. Order is
+            preserved in the returned mapping.
+
+    Returns:
+        Mapping from metric name to a float score (higher is better).
+
+    Raises:
+        ValueError: If inputs are not ANTs images, are not in compatible
+            physical space / shape, ``metrics`` is empty, or a metric name is
+            unknown.
+    """
+    _ensure_compatible_space(image, target, mask)
+    if metrics is None:
+        selected = _DEFAULT_SIMILARITY_METRICS
+    else:
+        if isinstance(metrics, (str, bytes)) or not isinstance(metrics, Sequence):
+            raise TypeError(
+                "`metrics` must be a sequence of metric names, got "
+                f"{type(metrics).__name__}"
+            )
+        if len(metrics) == 0:
+            raise ValueError("`metrics` must contain at least one metric name")
+        unknown = [name for name in metrics if name not in _SIMILARITY_METRICS]
+        if unknown:
+            supported = ", ".join(sorted(_SIMILARITY_METRICS))
+            raise ValueError(
+                f"Unknown similarity metric(s) {unknown!r}; expected names "
+                f"from {{{supported}}}"
+            )
+        selected = tuple(metrics)
+
+    scores: dict[str, float] = {}
+    for name in selected:
+        # ANTs convention: dissimilarity / cost (e.g. Correlation of an image
+        # with itself is -1). Negate so higher scores mean better agreement.
+        cost = float(
+            image_similarity(
+                target,
+                image,
+                metric_type=_SIMILARITY_METRICS[name],
+                fixed_mask=mask,
+                moving_mask=mask,
+            )
+        )
+        scores[name] = -cost
+    return scores

@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from niiflow.preproc.pipelines.pipeline_stages import GetImage, Rename, RuntimeContext
-from stage_helpers import STEP_ID, step_ctx, touch
+from test_preproc_pipeline_stages_base import STEP_ID, step_ctx, touch
 
 
 class TestRename:

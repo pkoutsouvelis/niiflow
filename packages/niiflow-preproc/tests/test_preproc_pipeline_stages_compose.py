@@ -12,9 +12,11 @@ from niiflow.preproc.pipelines.pipeline_stages import (
     PipelineStage,
     RuntimeContext,
 )
-from stage_helpers import DummyPipelineStage, build_stage_config, step_ctx
-
-# ---------------------------------------------------------------------------
+from test_preproc_pipeline_stages_base import (
+    DummyPipelineStage,
+    build_stage_config,
+    step_ctx,
+)
 
 
 class ScaleStage(PipelineStage):
@@ -68,7 +70,8 @@ class TestCompose:
             input_ref="ctx.outputs.first.output_nii",
         )
         pipeline = Compose([first, second], step_ids=["first", "second"])
-        ctx = pipeline.run(step_ctx())
+        # No parent step id → explicit child ids are kept as-is.
+        ctx = pipeline.run(RuntimeContext())
         assert ctx.outputs["first"]["output_nii"] == bytes([10])
         assert ctx.outputs["second"]["output_nii"] == bytes([30])
         assert ctx.steps_completed == ["first", "second"]
@@ -78,6 +81,21 @@ class TestCompose:
         ctx = pipeline.run(step_ctx("parent"))
         assert "parent.0" in ctx.outputs
         assert ctx.outputs["parent.0"]["output_nii"] == bytes([10])
+
+    def test_prefixes_explicit_step_ids_when_parent_is_set(
+        self, tmp_path: Path
+    ) -> None:
+        pipeline = Compose(
+            [
+                _scale_stage(tmp_path, scale_factor=2.0),
+                _scale_stage(tmp_path, scale_factor=3.0),
+            ],
+            step_ids=["first", "second"],
+        )
+        ctx = pipeline.run(step_ctx("block"))
+        assert ctx.steps_completed == ["block.first", "block.second"]
+        assert ctx.outputs["block.first"]["output_nii"] == bytes([10])
+        assert ctx.outputs["block.second"]["output_nii"] == bytes([15])
 
     def test_none_step_id_uses_auto_generated_step_ids(self, tmp_path: Path) -> None:
         pipeline = Compose(
@@ -92,9 +110,9 @@ class TestCompose:
             step_ids=[None, None],
         )
         ctx = pipeline.run(RuntimeContext())
+        assert ctx.steps_completed == ["step_0000", "step_0001"]
         assert ctx.outputs["step_0000"]["output_nii"] == bytes([10])
         assert ctx.outputs["step_0001"]["output_nii"] == bytes([30])
-        assert ctx.steps_completed == ["step_0000", "step_0001"]
 
     def test_start_and_end_slice_child_execution(self, tmp_path: Path) -> None:
         pipeline = Compose(
@@ -105,7 +123,7 @@ class TestCompose:
             ],
             step_ids=["a", "b", "c"],
         )
-        ctx = pipeline.run(step_ctx(), start=1, end=2)
+        ctx = pipeline.run(RuntimeContext(), start=1, end=2)
         assert "a" not in ctx.outputs
         assert ctx.outputs["b"]["output_nii"] == bytes([15])
         assert "c" not in ctx.outputs
@@ -121,23 +139,25 @@ class TestCompose:
         )
 
     def test_default_end_runs_every_stage(self, tmp_path: Path) -> None:
-        ctx = self._three_stage_pipeline(tmp_path).run(step_ctx())
+        ctx = self._three_stage_pipeline(tmp_path).run(RuntimeContext())
         assert ctx.steps_completed == ["a", "b", "c"]
 
     def test_negative_start_counts_back_from_end(self, tmp_path: Path) -> None:
-        ctx = self._three_stage_pipeline(tmp_path).run(step_ctx(), start=-2)
+        ctx = self._three_stage_pipeline(tmp_path).run(RuntimeContext(), start=-2)
         assert ctx.steps_completed == ["b", "c"]
 
     def test_negative_end_excludes_trailing_stages(self, tmp_path: Path) -> None:
-        ctx = self._three_stage_pipeline(tmp_path).run(step_ctx(), end=-1)
+        ctx = self._three_stage_pipeline(tmp_path).run(RuntimeContext(), end=-1)
         assert ctx.steps_completed == ["a", "b"]
 
     def test_negative_start_and_end_combine(self, tmp_path: Path) -> None:
-        ctx = self._three_stage_pipeline(tmp_path).run(step_ctx(), start=-3, end=-2)
+        ctx = self._three_stage_pipeline(tmp_path).run(
+            RuntimeContext(), start=-3, end=-2
+        )
         assert ctx.steps_completed == ["a"]
 
     def test_empty_range_runs_nothing(self, tmp_path: Path) -> None:
-        ctx = self._three_stage_pipeline(tmp_path).run(step_ctx(), start=1, end=1)
+        ctx = self._three_stage_pipeline(tmp_path).run(RuntimeContext(), start=1, end=1)
         assert ctx.steps_completed == []
 
     @pytest.mark.parametrize("start", [4, -4])
@@ -145,15 +165,15 @@ class TestCompose:
         # ``start == len(stages)`` stays legal (empty selection); anything past it
         # is a caller error rather than a silently truncated selection.
         with pytest.raises(ValueError, match=r"`start` .* out of range"):
-            self._three_stage_pipeline(tmp_path).run(step_ctx(), start=start)
+            self._three_stage_pipeline(tmp_path).run(RuntimeContext(), start=start)
 
     @pytest.mark.parametrize("end", [4, -4])
     def test_rejects_out_of_range_end(self, tmp_path: Path, end: int) -> None:
         with pytest.raises(ValueError, match=r"`end` .* out of range"):
-            self._three_stage_pipeline(tmp_path).run(step_ctx(), end=end)
+            self._three_stage_pipeline(tmp_path).run(RuntimeContext(), end=end)
 
     def test_start_equal_to_stage_count_is_allowed(self, tmp_path: Path) -> None:
-        ctx = self._three_stage_pipeline(tmp_path).run(step_ctx(), start=3)
+        ctx = self._three_stage_pipeline(tmp_path).run(RuntimeContext(), start=3)
         assert ctx.steps_completed == []
 
     @pytest.mark.parametrize(("start", "end"), [(2, 1), (-1, -2), (2, -2)])
@@ -161,15 +181,21 @@ class TestCompose:
         self, tmp_path: Path, start: int, end: int
     ) -> None:
         with pytest.raises(ValueError, match="must not precede"):
-            self._three_stage_pipeline(tmp_path).run(step_ctx(), start=start, end=end)
+            self._three_stage_pipeline(tmp_path).run(
+                RuntimeContext(), start=start, end=end
+            )
 
     def test_rejects_non_int_start(self, tmp_path: Path) -> None:
         with pytest.raises(TypeError, match="`start` must be an int"):
-            self._three_stage_pipeline(tmp_path).run(step_ctx(), start="1")  # type: ignore[arg-type]
+            self._three_stage_pipeline(tmp_path).run(
+                RuntimeContext(), start="1"  # type: ignore[arg-type]
+            )
 
     def test_rejects_non_int_end(self, tmp_path: Path) -> None:
         with pytest.raises(TypeError, match="`end` must be an int or None"):
-            self._three_stage_pipeline(tmp_path).run(step_ctx(), end=1.5)  # type: ignore[arg-type]
+            self._three_stage_pipeline(tmp_path).run(
+                RuntimeContext(), end=1.5  # type: ignore[arg-type]
+            )
 
     def test_rejects_duplicate_step_ids_at_construction(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match=r"step id 'a' at index 2 duplicates"):
@@ -198,13 +224,16 @@ class TestCompose:
         )
         assert pipeline.step_ids == (None, None)
 
-    def test_nested_duplicate_step_ids_still_raise_at_runtime(
-        self, tmp_path: Path
-    ) -> None:
+    def test_nested_compose_namespaces_inner_explicit_ids(self, tmp_path: Path) -> None:
+        # Running an inner Compose under an outer step id namespaces the inner
+        # child's explicit id, so a sibling that reuses the bare name no longer
+        # collides at runtime.
         inner = Compose([_scale_stage(tmp_path)], step_ids=["dup"])
         outer = Compose([inner, _scale_stage(tmp_path)], step_ids=["outer", "dup"])
-        with pytest.raises(ValueError, match="step ids must be unique"):
-            outer.run(step_ctx())
+        ctx = outer.run(RuntimeContext())
+        assert "outer.dup" in ctx.outputs
+        assert "dup" in ctx.outputs
+        assert ctx.steps_completed == ["outer.dup", "dup"]
 
     def test_flatten_inlines_nested_compose(self, tmp_path: Path) -> None:
         inner = Compose([_scale_stage(tmp_path)], step_ids=["inner"])
@@ -263,4 +292,4 @@ class TestCompose:
 
     def test_call_delegates_to_run(self, tmp_path: Path) -> None:
         pipeline = Compose([_scale_stage(tmp_path)], step_ids=["only"])
-        assert pipeline(step_ctx()) == pipeline.run(step_ctx())
+        assert pipeline(RuntimeContext()) == pipeline.run(RuntimeContext())

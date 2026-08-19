@@ -1,30 +1,32 @@
 # niiflow-preproc
 
-Offline, config-driven preprocessing workflows for neuroimaging. `niiflow-preproc`
-turns a single YAML/JSON config into a reproducible, parallel preprocessing run over
-many images, while keeping the heavy/optional scientific dependencies (ANTs, ANTsPyNet,
-DuckDB) isolated from the training stack.
+Configurable neuroimaging workflows for offline image preprocessing tasks (and more). 
+`niiflow-preproc` turns a single YAML/JSON config into a reproducible, parallel processing 
+run over many images, while keeping the heavy/optional scientific dependencies (ANTs, ANTsPyNet,
+DuckDB) isolated from the training stack (`niiflow-train`).
 
-At a glance, it lets you:
+**Key features** include:
 
-- **Build pipelines dynamically** from a list (or id-keyed map) of steps — bias-field
+- **Building pipelines dynamically** from a series of steps — bias-field
 correction, skull-stripping, registration, resampling, intensity normalization, QC,
-and more — wiring steps together with `ctx.` references and gating any step with an
+and more — wiring steps together with a shared context and gating any step with an
 `enable` flag (e.g. probe a QC result to the rest of the pipeline).
-- **Explore active files dynamically** with the `nifti-finder` backend: glob patterns
-plus composable filters (table membership, companion-file existence, AND/OR logic) to
-select exactly the images you want (e.g. healthy T1w–FLAIR pairs in a BIDS dataset).
-- **Stage additional inputs/outputs around each active file**: search for companion
+- **Exploring active files dynamically** with the `nifti-finder` backend: glob patterns
+plus composable filters (e.g., metadata value from table, companion-file existence, AND/OR logic)
+to select exactly the images you want (e.g. healthy T1w–FLAIR pairs in a BIDS dataset).
+- **Staging additional inputs/outputs around each active file**: search for companion
 files near an anchor and construct output paths via root discovery (`parent_match`,
 `mirror`, `parent_up`) and dynamic references (`{active.stem}`, `{params...}`).
-- **Plan, then execute** with a clean separation of phases: discovery + staging produce
+- **Planning, then executing** with a clean separation of phases: discovery + staging produce
 a `RunPlan`; execution runs it with structured logging and multi-process
 parallelization.
-- **Orchestrate end-to-end from the CLI**: one config wires explorer + staging +
+- **Orchestrating end-to-end from the CLI**: one config wires explorer + staging +
 pipeline, runs on explicit files and/or directories, and saves/loads plans as DuckDB
 for fast reuse.
 
 ---
+
+
 
 ## Installation
 
@@ -45,6 +47,8 @@ uv run niiflow-preproc --help
 
 ---
 
+
+
 ## 1. Dynamic pipeline execution
 
 A pipeline is a dictionary with a `steps` entry. Pass it to
@@ -58,13 +62,13 @@ reference each other by id).
 Each step spec is `{name, params, save_outputs, verbose}`:
 
 - `name` — a registered stage class (see [Available stages](#available-stages)).
-- `params` — keyword inputs to the stage. String values may use `ctx.` references such
-as `"ctx.run_id"` or `"ctx.outputs.<step_id>.<output>"`.
+- `params` — keyword inputs to the stage. Values may be `ctx.` references such
+as `"ctx.outputs.<step_id>.<output>"` to directly access outputs from previous steps.
 - `save_outputs` — per-output paths to persist results to disk.
 
-The example below uses **simple, explicit paths and `ctx.` references** (no staging). A
+The example below uses **simple, explicit paths and** `ctx.` **references** (no staging). A
 single QC step (`CheckVoxelSpacing`) runs first, and its boolean `passed` output is
-**probed into the rest of the pipeline via the `enable` flag** — when QC fails, the
+**probed into the rest of the pipeline via the** `enable` **flag** — when QC fails, the
 gated steps are skipped:
 
 ```python
@@ -114,34 +118,22 @@ dynamic_pipeline(
 )
 ```
 
-How the `enable` gate works: `enable` is resolved first (including `ctx.` references)
-before any other parameter is loaded. If `enable` is `False`, the stage returns without
-calling `forward`, writing outputs, or publishing them to the context — and without
-materialising other `params`. This pairs naturally with a boolean QC output like
-`"ctx.outputs.qc.passed"`, so downstream gated steps may still declare
-`ctx.outputs.<upstream>.<output>` inputs even when that upstream step was skipped.
-
-A common pairing is `GetImage` with this gate: it materialises an image into the context
-as `out_image`, so pointing `enable` at a QC output and setting
-`save_outputs["out_image"]` to a separate folder persists only the images that passed
-quality control, e.g. `params={"image": "ctx.outputs.strip.out_image", "enable":
-"ctx.outputs.qc.passed"}` with `save_outputs={"out_image":
-"/data/passed/sub-01_T1w.nii.gz"}`.
-
-### Available stages
+### Available processing stages
 
 `ANTsBiasFieldCorrection`, `ANTsBrainExtraction`, `ANTsDenoise`,
 `ANTsPreprocessBrainImage`, `ANTsRegistration`, `ANTsApplyTransforms`, `ANTsResample`,
 `ANTsResampleToTarget`, `Reorient`, `ClampIntensities`, `MinmaxNorm`, `ZTransformNorm`,
-`CenterCrop`, `CenterPad`, `CropToMask`, `CropToRange`, `PadToRange`, `CheckDimensions`,
-`CheckVoxelSpacing`, `ApplyMask`, `SmoothMask`, `RelabelMask`, `ToNumpy`,
-`GetImage`, `Rename`, `Delete`.
+`PointwiseArithmetic`, `CenterCrop`, `CenterPad`, `CropToMask`, `CropToRange`,
+`PadToRange`, `CheckDimensions`, `CheckVoxelSpacing`, `ApplyMask`, `SmoothMask`,
+`RelabelMask`, `ToNumpy`, `GetImage`, `Rename`, `Delete`.
 
 ---
 
+
+
 ## 2. Dynamic exploration of active files
 
-When a workflow `plan` input uses **`mode: search`**, an explorer discovers the
+When a workflow receives `mode: search` as an input, an explorer discovers the
 *active files* (the canonical anchor per processing unit, e.g. each subject's T1w).
 The explorer lives under that search input's `explorer_params`: glob `patterns` and
 optional composable `filters`, backed by
@@ -186,34 +178,33 @@ discovery; only `search` roots are explored.
 
 ---
 
+
+
 ## 3. Flexible staging around active files
 
 Staging resolves *additional* inputs and outputs around each active file **without ever
 rewriting the active anchor**. A `FileStager` is configured with `pointers` — dotted
 paths into the pipeline `params` — each marked `"input"` or `"output"`:
 
-- **input** pointers may be an explicit path or a *search spec* (`root` + `search`),
-resolved to the matching companion file(s).
-- **output** pointers build a target path from a discovered `root` plus a `name`,
-and may reference resolved inputs via `{params...}` and the active file via
-`{active.*}`.
-- **`allow_overwrite`** defaults to `true`, so re-staging may replace existing
+- **input** pointers may be an explicit path or a *search spec* (`root` + `search`).
+- **output** pointers build a target path from a discovered `root` plus a `name`.
+- `allow_overwrite` defaults to `true`, so re-staging may replace existing
 derivative paths. Set it to `false` to treat existing outputs as already done
 (see [Continuing from existing runs](#continuing-from-existing-runs)).
 
-`pointers` may also be omitted entirely. `FileStager` then resolves dynamic
-references (`{active.*}` / `{params.*}`) throughout `params` without treating any
-parameter as a file to locate or materialise — useful when the pipeline already spells
-out every path and only needs the placeholders expanded.
+`pointers` may also be omitted entirely. **Dynamic references** (`{active.*}` / `{params.*}`) 
+can be resolved throughout `params` without treating any parameter as a file to locate or 
+materialise — useful when the pipeline already spells out every path and only needs the 
+placeholders expanded. 
 
 Roots can be **discovered** relative to the active file: `parent_up` (N levels up),
 `parent_match` (nearest/farthest ancestor matching a pattern), and `mirror` (rewrite one
-hierarchy into another, e.g. `rawdata → derivatives`).
+hierarchy into another, e.g. `rawdata -> derivatives`). Omit `root`, or omit `mode` on a
+root spec, to start from the active file's parent.
 
 The pipeline and staging specs below work together: step parameters use
-`{active.path}` and output `save_outputs` hold staging placeholders that
-`FileStager` resolves before execution. A QC step gates skull-stripping via
-`enable`:
+`{active}` and other staging placeholders in `save_outputs` that
+`FileStager` resolves before execution:
 
 ```yaml
 pipeline_params:
@@ -222,7 +213,7 @@ pipeline_params:
     qc:
       name: CheckVoxelSpacing
       params:
-        image: "{active.path}"
+        image: "{active}"
         expected: [1.0, 1.0, 1.0]
         op: "<="
         id: "ctx.run_id"
@@ -239,7 +230,7 @@ pipeline_params:
     strip:
       name: ANTsBrainExtraction
       params:
-        image: "{active.path}"
+        image: "{active}"
         modality: t1
         enable: "ctx.outputs.qc.passed"
       save_outputs:
@@ -250,7 +241,7 @@ pipeline_params:
             mirror:
               source: "rawdata"
               target: "derivatives/niiflow"
-          name: "{active.stem|strip:_T1w}_desc-brain_T1w.nii.gz"
+          name: "{active.name|strip:_T1w.nii.gz}_desc-brain_T1w.nii.gz"
         brain_mask:
           root:
             mode: parent_match
@@ -258,7 +249,7 @@ pipeline_params:
             mirror:
               source: "rawdata"
               target: "derivatives/niiflow"
-          name: "{active.stem|strip:_T1w}_desc-brain_mask.nii.gz"
+          name: "{active.name|strip:_T1w.nii.gz}_desc-brain_mask.nii.gz"
   order: [qc, strip]
 
 staging_params:
@@ -276,9 +267,9 @@ For an active file `.../rawdata/sub-01/anat/sub-01_T1w.nii.gz` this stages the T
 QC and strip inputs, writes the QC report under `derivatives/niiflow/qc/...`, and
 writes skull-stripped outputs under `derivatives/niiflow/...` when QC passes.
 
-Supported references inside specs: `{active.path|name|stem|parent}` and
-`{params.<dotted.path>[.path|name|stem|parent]}`, with a `|strip:<suffix>` modifier
-(e.g. `{active.stem|strip:_T1w}`). `resolve_results` may be `first`, `single`, or `all`.
+Supported references inside specs: `{active}`, `{active.name|stem|parent}`, and
+`{params.<dotted.path>[.<attr>]}`, with a `|strip:<suffix>` modifier
+(e.g. `{active.name|strip:_T1w.nii.gz}`). `resolve_results` may be `first`, `single`, or `all`.
 
 `staging_params` accepts a single `{stager_name, params}` dict or a **list** of such
 dicts; when a list is provided, stagers run **in order**, each transforming the entries
@@ -298,30 +289,44 @@ staging_params:
         steps.strip.save_outputs.brain_mask: output
 ```
 
+
+
 ### Available stagers
 
-`FileStager`.
+Registered names for `stager_name` (via `create_stager` / `staging_params`):
+
+- `FileStager` — resolve input/output file pointers around the active path
+(`pointers`, `ensure_inputs_exist`, `allow_overwrite`, `allow_failed_entries`).
+- `EnsureActiveExists` — require each entry's active path to exist and be a
+file (`allow_failed_entries`). Place it in the chain when actives may be
+invented mid-staging; the default discovery path already yields real files.
+- `ResolveActiveReferences` / `ResolveParamReferences` — expand
+`{active.*}` then leftover `{params.*}` references. Provided workflows always
+bookend the configured chain with these (even when `staging_params` is
+omitted), so you rarely need to list them explicitly.
 
 ---
 
+
+
 ## 4. Workflows: planning and controlled execution
 
-`DynamicPreprocessingWorkflow` ties everything together. It separates **planning**
+`DynamicProcessingWorkflow` ties everything together. It separates **planning**
 (discovery + staging → a `RunPlan`) from **execution** (running the plan), and provides
 structured logging and process-based parallelism.
 
 ```python
-from niiflow.preproc.workflows import DynamicPreprocessingWorkflow, dynamic_workflow
+from niiflow.preproc.workflows import DynamicProcessingWorkflow, dynamic_workflow
 
-workflow = DynamicPreprocessingWorkflow(
-    pipeline_params={...},        # the `steps` spec from section 1/3 (required)
+workflow = DynamicProcessingWorkflow(
+    pipeline_params={...},        # shared `steps` spec from section 1/3, or a list (one per active)
     staging_params={...},         # the stager from section 3 (optional)
     num_workers=1,                # serial by default; "auto" or N>1 for parallel cohort runs
     logs_root="/data/logs",       # writes main.log, status.log, workers.log
     timeout=1800,                 # soft per-entry limit (seconds)
 )
 
-# Phase 1 — plan only (discover active files + stage entries, no processing):
+# Phase 1 — plan only (collect active files + stage entries, no processing):
 plan = workflow.plan(
     [
         {
@@ -334,33 +339,49 @@ plan = workflow.plan(
 )
 plan.save("/data/plans/run.duckdb")   # persist for reuse
 
-# Phase 2 — execute the prepared plan:
+# Phase 2 — execute the prepared plan (optionally a contiguous window):
 workflow.run_plan(plan)
+workflow.run_plan(plan, start=0, end=1000)   # or plan[0:1000] then run_plan
 
-# Or one-shot orchestration (plan / plan-only / from-plan / dry-run):
+# Or end-to-end orchestration (plan / plan-only / from-plan / dry-run):
 dynamic_workflow(
     settings={"pipeline_params": {...}, "staging_params": {...}, "num_workers": 1},
     inputs="/data/extra/sub-99_T1w.nii.gz",
 )
+# Shard a saved plan across jobs (e.g. cluster array tasks):
+dynamic_workflow(from_plan="/data/plans/run.duckdb", start=0, end=1000)
 ```
 
-- **Planning** (`plan`) discovers active files from `InputData` (`search` /
+- **Planning** (`plan`) collects active files from `InputData` (`search` /
 `from_file` / explicit paths), stages per-entry parameters, and returns a `RunPlan`
-of `StagedEntry` objects. To plan and execute, call `plan` then `run_plan`, or use
+of `StagedEntry` objects. A mapping `pipeline_params` is copied to every entry; a
+list of mappings is aligned 1-to-1 with the collected actives and cannot be used
+with `search`.
+To plan and execute, call `plan` then `run_plan`, or use
 `dynamic_workflow(...)` for a single orchestration entry point (plan /
-plan-only / from-plan / dry-run). That driver returns nothing; persist with
+plan-only / from-plan / dry-run). The orchestrator returns nothing; persist with
 `save_plan_to` and reload via `from_plan` / `RunPlan.load` when you need the plan.
 The CLI `dynamic_workflow` command uses that driver.
 - **Logging** is controlled by `logs_root` and the `main_logs` / `status_logs` /
-`worker_logs` / `dev_mode` flags. The status log records one line per entry
-(`<active> | SUCCESS`, `... | FAILURE | <traceback>`, `... | TIMEOUT`, or
+`worker_logs` / `dev_mode` flags. The status log records completion as
+`<active> | SUCCESS` or `... | FAILURE | <traceback>` (or
 `... | STAGING_FAILURE | <message>` when staging recorded errors on an entry).
+A configured `timeout` is a soft per-entry time limit. Exceeding it does not
+cancel the worker; `status.log` records `TIMEOUT` to mark the overrun.
+Completion is still `SUCCESS` or `FAILURE`. Retry from
+`status.log` using the last `SUCCESS` / `FAILURE` line per active.
 - **Parallelization** defaults to serial (`num_workers=1`). Set `num_workers` to
 `"auto"` (CPU count) or an integer `> 1` to run entries in a `ProcessPoolExecutor`.
 For parallel cohort runs, also consider limiting per-process ITK/OMP threads to
-avoid oversubscription. `timeout` is a soft per-entry limit reported in the status log.
+avoid oversubscription.
 - **RunPlan persistence**: `.duckdb` (recommended, scalable) or `.json` (debug).
 Reload with `RunPlan.load(path)` and execute without re-discovering or re-staging.
+- **Slicing large plans**: select a contiguous window of plan entry indices
+(including staging-failed entries) with `plan.slice(start, end)` / `plan[start:end]`,
+`workflow.run_plan(plan, start=..., end=...)`, or
+`RunPlan.load(path, start=..., end=...)` / `dynamic_workflow(..., from_plan=..., start=..., end=...)`.
+Bounds use inclusive `start`, exclusive `end`, negative indexing, and raise on
+out-of-range values. Prefer planning once, then run batches via `from_plan`.
 
 ### Continuing from existing runs
 
@@ -368,13 +389,12 @@ By default, `FileStager` uses `allow_overwrite: true`, so a repeat `execute` may
 overwrite derivative outputs. To **continue** after a partial or failed run, narrow
 which actives are discovered or which entries pass staging:
 
-**1. Filter actives with `status.log` (explorer)**  
+**1. Filter actives with** `status.log` **(explorer)**  
 Add an `IncludeFromLogs` or `ExcludeFromLogs` filter under
 `inputs.explorer_params.filters` (for a `mode: search` input), pointing at the
 workflow `status.log` from a previous run. Typical patterns: exclude actives that
-already logged `SUCCESS`, or include only `FAILURE` / `TIMEOUT` lines for a retry
-pass. Filter kwargs are documented in
-[nifti-finder](https://github.com/pkoutsouvelis/nifti-finder).
+already logged `SUCCESS`, or include only actives whose last line is `FAILURE`. 
+Filter kwargs are documented in [nifti-finder](https://github.com/pkoutsouvelis/nifti-finder).
 
 ```yaml
 inputs:
@@ -414,14 +434,16 @@ plan that omits already-finished actives.
 
 ### Available workflows
 
-`DynamicPreprocessingWorkflow`.
+`DynamicProcessingWorkflow`.
 
 ---
+
+
 
 ## 5. CLI: end-to-end orchestration
 
 The CLI is a thin registry: each subcommand name is an orchestration driver, and the
-config file is that driver's keyword arguments. Today the registered command is
+config file is that driver's keyword arguments. Now, the only registered command is
 `dynamic_workflow`.
 
 An end-to-end example — BIDS T1w discovery (controls with FLAIR companions), QC-gated
@@ -455,10 +477,9 @@ from_plan: /data/plans/controls.duckdb
 # omit inputs / save_plan_to when using from_plan
 ```
 
-Configs may be `.yaml`, `.yml`, or `.json`. Use `.duckdb` for production-scale plans
-you intend to reload, and `.json` for quick inspection.
-
 ---
+
+
 
 ## Project structure
 
@@ -483,14 +504,17 @@ niiflow-preproc/
     │   ├── file_stager.py            # FileStager (input/output pointer resolution)
     │   ├── stager_factory.py         # create_stager / discovery
     │   ├── search.py                 # parent_up / parent_match / mirror_root
-    │   ├── dynamic.py                # {active.*} / {params...} reference resolution
+    │   ├── dynamic_referencing.py    # {active.*} / {params...} reference resolution
+    │   ├── utility.py                # EnsureActiveExists and other utility stagers
     │   ├── validation.py
     │   └── types.py                  # Root/Input/Output spec types
     ├── pipelines/
     │   ├── dynamic_pipeline.py       # dynamic_pipeline (build + execute)
     │   └── pipeline_stages/
     │       ├── pipeline_stage.py     # PipelineStage base + RuntimeContext
+    │       ├── pipeline_stage_factory.py  # create_pipeline_stage / discovery
     │       ├── compose.py            # Compose (ordered stage runner)
+    │       ├── arithmetic.py         # PointwiseArithmetic
     │       ├── bias_field.py         # ANTsBiasFieldCorrection
     │       ├── skull_stripping.py    # ANTsBrainExtraction
     │       ├── registration.py       # ANTsRegistration / ANTsApplyTransforms
@@ -504,9 +528,9 @@ niiflow-preproc/
     │       └── pipelines.py          # ANTsPreprocessBrainImage
     ├── workflows/
     │   ├── workflow.py               # ProcessingWorkflow / PlannableWorkflow (execution engine)
-    │   ├── dynamic_workflow.py       # DynamicPreprocessingWorkflow / dynamic_workflow
+    │   ├── dynamic_workflow.py       # DynamicProcessingWorkflow / dynamic_workflow
     │   ├── workflow_factory.py       # create_workflow / discovery
-    │   ├── mixins.py                 # SupportsFileDiscovery / SupportsStaging
+    │   ├── mixins.py                 # SupportsInputDiscovery / SupportsStaging
     │   ├── types.py                  # InputData / SearchInput / FromFileInput
     │   ├── plan.py                   # RunPlan (.duckdb / .json persistence)
     │   ├── logging_manager.py        # main / status / parallel logging

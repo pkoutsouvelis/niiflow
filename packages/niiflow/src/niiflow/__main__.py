@@ -6,6 +6,6 @@ from __future__ import annotations
 def main() -> None:
     """Print a placeholder message until CLI subcommands are implemented."""
     print(
-        "niiflow: import niiflow.core (training) or niiflow.preproc (offline preprocessing). "
+        "niiflow: import niiflow.train (training) or niiflow.preproc (offline preprocessing). "
         "CLI subcommands will be added here."
     )

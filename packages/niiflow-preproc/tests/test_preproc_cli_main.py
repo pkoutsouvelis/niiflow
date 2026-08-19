@@ -12,7 +12,7 @@ from niiflow.preproc.cli import commands
 from niiflow.preproc.cli.main import build_parser, main
 from niiflow.preproc.config import load_config
 from niiflow.preproc.staging import StagedEntry
-from niiflow.preproc.workflows import DynamicPreprocessingWorkflow, RunPlan
+from niiflow.preproc.workflows import DynamicProcessingWorkflow, RunPlan
 
 
 def _config(
@@ -127,7 +127,7 @@ class TestMainEquivalence:
         config = _config(tmp_path, file_path, save_plan_to=plan_path, plan_only=True)
         config_path = _write_config(tmp_path / "job.json", config)
         monkeypatch.setattr(
-            DynamicPreprocessingWorkflow, "process_single", staticmethod(_touch)
+            DynamicProcessingWorkflow, "process_single", staticmethod(_touch)
         )
 
         commands.run("dynamic_workflow", load_config(config_path))

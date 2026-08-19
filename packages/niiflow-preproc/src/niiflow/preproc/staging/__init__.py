@@ -1,9 +1,21 @@
 """Staging utilities."""
 
 from .file_stager import FileStager
+from .utility import EnsureActiveExists
+from .dynamic_referencing import (
+    DynamicReferenceError,
+    ResolveActiveReferences,
+    ResolveParamReferences,
+    add_reference_staging_bookends,
+    resolve_dynamic_refs,
+)
+from .modifiers import (
+    get_modifiers,
+    strip,
+)
 from .stager import (
     FileStagingError,
-    StageContext,
+    StagingContext,
     StagedEntry,
     Stager,
     StagingErrorRecord,
@@ -22,11 +34,20 @@ from .types import (
     RootSearchSpec,
     RootSelection,
     RootSpec,
+    SingleRootSpec,
 )
 
 __all__ = [
     "FileStager",
-    "StageContext",
+    "EnsureActiveExists",
+    "DynamicReferenceError",
+    "ResolveActiveReferences",
+    "ResolveParamReferences",
+    "add_reference_staging_bookends",
+    "resolve_dynamic_refs",
+    "get_modifiers",
+    "strip",
+    "StagingContext",
     "StagedEntry",
     "Stager",
     "FileStagingError",
@@ -45,4 +66,5 @@ __all__ = [
     "RootSearchSpec",
     "RootSelection",
     "RootSpec",
+    "SingleRootSpec",
 ]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 __all__ = [
-    "StageContext",
+    "StagingContext",
     "StagingErrorRecord",
     "StagedEntry",
     "Stager",
@@ -20,7 +20,7 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class StageContext:
+class StagingContext:
     """Context available while staging one entry.
 
     Attributes:
@@ -88,12 +88,27 @@ class Stager(ABC):
 
         Active files and any errors already recorded on an entry are preserved so
         multiple stagers can be chained.
+
+        Raises:
+            TypeError: If ``entries`` is not a sequence of :class:`StagedEntry`
+                objects, or :meth:`stage_single` returns a non-entry.
         """
+        if isinstance(entries, (str, bytes)) or not isinstance(entries, Sequence):
+            raise TypeError(
+                f"`entries` must be a sequence of `StagedEntry` objects, got "
+                f"{type(entries).__name__}"
+            )
+
         staged: list[StagedEntry] = []
 
         for index, entry in enumerate(entries):
+            if not isinstance(entry, StagedEntry):
+                raise TypeError(
+                    "`entries` must contain only `StagedEntry` objects, got "
+                    f"{type(entry).__name__} at index {index}"
+                )
             try:
-                staged.append(self.stage_single(entry))
+                staged_entry = self.stage_single(entry)
             except Exception as exc:
                 error = self.make_error(exc, entry, index=index)
 
@@ -107,6 +122,15 @@ class Stager(ABC):
                         errors=entry.errors + (error,),
                     )
                 )
+                continue
+
+            if not isinstance(staged_entry, StagedEntry):
+                raise TypeError(
+                    f"{type(self).__name__}.stage_single() must return a "
+                    f"`StagedEntry`, got {type(staged_entry).__name__} at index "
+                    f"{index}"
+                )
+            staged.append(staged_entry)
 
         return staged
 
@@ -149,9 +173,12 @@ def make_entries(
 ) -> list[StagedEntry]:
     """Create :class:`StagedEntry` objects from active files and parameter specs.
 
-    ``active_files`` are stable anchors expanded to absolute paths. If ``params`` is a
-    dictionary, a deep copy is attached to each entry. If ``params`` is a sequence, it
-    must align one-to-one with ``active_files`` and each mapping is deep-copied.
+    ``active_files`` are stable anchors expanded to absolute paths. Existence is
+    not checked here; use :class:`~niiflow.preproc.staging.utility.EnsureActiveExists`
+    in a staging chain when actives must exist on disk. Paths that already exist
+    as directories are rejected. If ``params`` is a dictionary, a deep copy is
+    attached to each entry. If ``params`` is a sequence, it must align one-to-one
+    with ``active_files`` and each mapping is deep-copied.
     """
     if not active_files:
         raise ValueError("active_files must be a non-empty sequence.")
@@ -159,9 +186,7 @@ def make_entries(
     actives = [Path(item).expanduser().resolve() for item in active_files]
 
     for active in actives:
-        if not active.exists():
-            raise FileNotFoundError(f"Active file does not exist: {active}")
-        if active.is_dir():
+        if active.exists() and active.is_dir():
             raise ValueError(f"Active path must be a file, got directory: {active}")
 
     if isinstance(params, dict):

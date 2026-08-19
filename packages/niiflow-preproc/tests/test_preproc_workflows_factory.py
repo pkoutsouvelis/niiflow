@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from niiflow.preproc.staging import FileStager
-from niiflow.preproc.workflows import DynamicPreprocessingWorkflow
+from niiflow.preproc.workflows import DynamicProcessingWorkflow
 from niiflow.preproc.workflows.workflow_factory import (
     create_workflow,
     discover_workflow_classes,
@@ -16,7 +16,7 @@ from niiflow.preproc.workflows.workflow_factory import (
 
 def test_discover_workflow_classes_contains_dynamic() -> None:
     registry = discover_workflow_classes()
-    assert "DynamicPreprocessingWorkflow" in registry
+    assert "DynamicProcessingWorkflow" in registry
 
 
 def test_create_workflow_unknown_name_raises() -> None:
@@ -28,7 +28,7 @@ def test_create_workflow_forwards_kwargs(tmp_path: Path) -> None:
     pointers = {"steps.echo.params.image": "input"}
     pipeline_params = {"steps": [], "output_path": str(tmp_path / "out.txt")}
     wf = create_workflow(
-        "DynamicPreprocessingWorkflow",
+        "DynamicProcessingWorkflow",
         {
             "num_workers": 3,
             "timeout": 12.5,
@@ -40,15 +40,15 @@ def test_create_workflow_forwards_kwargs(tmp_path: Path) -> None:
             "pipeline_params": pipeline_params,
         },
     )
-    assert isinstance(wf, DynamicPreprocessingWorkflow)
+    assert isinstance(wf, DynamicProcessingWorkflow)
 
     # Non-default values prove the kwargs reached the constructor rather than
     # falling back to defaults.
     assert wf.num_workers == 3
     assert wf.timeout == 12.5
 
-    assert len(wf._stagers) == 1
-    stager = wf._stagers[0]
+    assert len(wf._stagers) == 3
+    stager = wf._stagers[1]
     assert isinstance(stager, FileStager)
     assert stager.pointers == pointers
 

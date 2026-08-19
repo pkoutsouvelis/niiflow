@@ -171,7 +171,7 @@ def _serialize_saved_paths(
 class PipelineStage(ABC):
     """Base class for atomic pipeline stages.
 
-    A stage encapsulates a single preprocessing step: validated input parameters
+    A stage encapsulates a single processing step: validated input parameters
     (via :attr:`REQUIRED_PARAMS` and optionally :meth:`check_params`), lazy
     materialisation of each parameter (via :meth:`load_param`), a :meth:`forward`
     pass producing named outputs, optional persistence of those outputs, and

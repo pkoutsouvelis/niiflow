@@ -13,6 +13,7 @@ __all__ = [
     "CenterCrop",
     "CenterPad",
     "CheckDimensions",
+    "CheckImageSimilarity",
     "CheckVoxelSpacing",
     "ClampIntensities",
     "Compose",
@@ -23,6 +24,7 @@ __all__ = [
     "MinmaxNorm",
     "PadToRange",
     "PipelineStage",
+    "PointwiseArithmetic",
     "RelabelMask",
     "RuntimeContext",
     "Rename",
@@ -30,10 +32,11 @@ __all__ = [
     "SmoothMask",
     "ToNumpy",
     "ZTransformNorm",
-    "create_stage",
-    "discover_stage_classes",
+    "create_pipeline_stage",
+    "discover_pipeline_stage_classes",
 ]
 
+from .arithmetic import PointwiseArithmetic
 from .bias_field import ANTsBiasFieldCorrection
 from .compose import Compose
 from .croppad import (
@@ -47,10 +50,13 @@ from .denoising import ANTsDenoise
 from .intensity_normalization import ClampIntensities, MinmaxNorm, ZTransformNorm
 from .masks import ApplyMask, RelabelMask, SmoothMask
 from .pipelines import ANTsPreprocessBrainImage
-from .qc import CheckDimensions, CheckVoxelSpacing
+from .qc import CheckDimensions, CheckImageSimilarity, CheckVoxelSpacing
 from .registration import ANTsApplyTransforms, ANTsRegistration
 from .resampling import ANTsResample, ANTsResampleToTarget
 from .pipeline_stage import PipelineStage, RuntimeContext
 from .skull_stripping import ANTsBrainExtraction
-from .stage_factory import create_stage, discover_stage_classes
+from .pipeline_stage_factory import (
+    create_pipeline_stage,
+    discover_pipeline_stage_classes,
+)
 from .utility import Delete, GetImage, Rename, Reorient, ToNumpy

@@ -1,9 +1,8 @@
 """Tests for the :class:`PipelineStage` base class and :class:`RuntimeContext`.
 
-:class:`DummyPipelineStage` exercises the full ``run()`` / context / persistence
-contract without ANTs. Shipped stages inherit this machinery unchanged; that
-inheritance is verified separately in
-``test_preproc_pipeline_stages_contract.py``.
+Defines the dummy-stage helpers used by base / Compose tests. Shipped stages
+inherit this machinery unchanged; that inheritance is verified separately in
+``test_preproc_pipeline_stages_shipped_shared.py``.
 """
 
 from __future__ import annotations
@@ -13,14 +12,94 @@ from typing import Any
 
 import pytest
 
-from niiflow.preproc.pipelines.pipeline_stages import RuntimeContext
-from stage_helpers import (
-    STEP_ID,
-    DummyPipelineStage,
-    build_stage_config,
-    make_stage,
-    step_ctx,
-)
+from niiflow.preproc.pipelines.pipeline_stages import PipelineStage, RuntimeContext
+
+STEP_ID = "step"
+
+
+def touch(path: Path) -> Path:
+    """Create an empty file (and parents) at ``path``; return ``path``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\x00")
+    return path
+
+
+def step_ctx(step_id: str = STEP_ID, **kwargs: Any) -> RuntimeContext:
+    """Build a :class:`RuntimeContext` with a default step id."""
+    return RuntimeContext(step_id=step_id, **kwargs)
+
+
+class DummyPipelineStage(PipelineStage):
+    """Minimal stage for ``PipelineStage`` machinery tests."""
+
+    REQUIRED_PARAMS = frozenset({"input_nii"})
+
+    def check_params(self, params: dict[str, Any]) -> None:
+        scale = params.get("scale_factor", 1.0)
+        if not isinstance(scale, (int, float)):
+            raise ValueError(
+                f"scale_factor must be numeric, got {type(scale).__name__}"
+            )
+
+    def load_param(self, key: str, value: Any) -> Any:
+        if key == "input_nii":
+            if isinstance(value, (bytes, bytearray)):
+                return bytes(value)
+            return Path(value).read_bytes()
+        return value
+
+    def forward(self, **params: Any) -> dict[str, Any]:
+        raw: bytes = params["input_nii"]
+        scale = float(params.get("scale_factor", 1.0))
+        sample = raw[0] if raw else 0
+        return {"output_nii": bytes([min(255, int(sample * scale))])}
+
+    def save_output(self, key: str, value: Any, output_path: Path) -> Path:
+        if key != "output_nii":
+            raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(value)
+        return output_path
+
+
+def build_stage_config(
+    stage_cls: type[PipelineStage],
+    tmp_path: Path,
+    *,
+    params: dict[str, Any] | None = None,
+    save_outputs: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return ``(params, save_outputs)`` defaults for :class:`DummyPipelineStage`."""
+    if stage_cls is not DummyPipelineStage:
+        raise TypeError(
+            f"base helpers only support DummyPipelineStage, got {stage_cls.__name__}"
+        )
+    input_nii = touch(tmp_path / "input.nii.gz")
+    base_params: dict[str, Any] = {
+        "input_nii": str(input_nii),
+        "scale_factor": 2.0,
+    }
+    base_save_outputs: dict[str, Any] = {"output_nii": None}
+    if params is not None:
+        base_params = {**base_params, **params}
+    if save_outputs is not None:
+        base_save_outputs = {**base_save_outputs, **save_outputs}
+    return base_params, base_save_outputs
+
+
+def make_stage(
+    stage_cls: type[PipelineStage],
+    tmp_path: Path,
+    *,
+    params: dict[str, Any] | None = None,
+    save_outputs: dict[str, Any] | None = None,
+    verbose: bool = True,
+) -> PipelineStage:
+    """Instantiate :class:`DummyPipelineStage` with default test config."""
+    p, s = build_stage_config(
+        stage_cls, tmp_path, params=params, save_outputs=save_outputs
+    )
+    return stage_cls(params=p, save_outputs=s, verbose=verbose)
 
 
 class TestRuntimeContext:

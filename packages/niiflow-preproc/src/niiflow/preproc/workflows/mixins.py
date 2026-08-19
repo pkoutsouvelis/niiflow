@@ -4,7 +4,7 @@ from __future__ import annotations
 
 __all__ = [
     "InputData",
-    "SupportsFileDiscovery",
+    "SupportsInputDiscovery",
     "SupportsStaging",
 ]
 
@@ -14,15 +14,24 @@ from pathlib import Path
 from collections.abc import Sequence
 
 from niiflow.preproc.utils.file import get_ext, resolve_path, write_txt
-from niiflow.preproc.data import get_data_explorer, read_paths_from_file
-from niiflow.preproc.staging import Stager, make_entries, create_stager
+from niiflow.preproc.data import (
+    NiftiFinderConfig,
+    get_data_explorer,
+    read_paths_from_file,
+)
+from niiflow.preproc.staging import (
+    Stager,
+    make_entries,
+    create_stager,
+    add_reference_staging_bookends,
+)
 
 from .plan import RunPlan
 from .types import InputData
 
 
-class SupportsFileDiscovery:
-    """Discover active files that anchor each processing entry.
+class SupportsInputDiscovery:
+    """Collect active files that anchor each processing entry.
 
     An active file is the canonical path for one unit of work — the file
     that defines what is being processed. For example, a subject's T1w
@@ -30,24 +39,40 @@ class SupportsFileDiscovery:
     also locates FLAIR, a segmentation mask, and derivative outputs relative
     to that anchor.
 
-    :meth:`discover_active_files` accepts :data:`~niiflow.preproc.workflows.types.InputData`:
+    :meth:`collect_active_files` accepts :data:`~niiflow.preproc.workflows.types.InputData`:
     an explicit file path, a ``search`` / ``from_file`` mapping (see
     :mod:`~niiflow.preproc.workflows.types`), or a sequence of those entries.
+    Each source has a corresponding public collector:
+    :meth:`collect_explicit_active_file`, :meth:`collect_active_files_from_file`,
+    and :meth:`search_active_files`. The facade may disable any of those modes
+    with ``allow_explicit`` / ``allow_from_file`` / ``allow_search``.
+
+    Existence rules are per source: explicit ``Path`` / ``str`` inputs must
+    exist; ``search`` results exist by construction (roots must exist);
+    ``from_file`` existence is controlled per entry by optional ``strict``
+    (default ``True``), forwarded to
+    :func:`~niiflow.preproc.data.read_paths_from_file`.
     """
 
-    def discover_active_files(
+    def collect_active_files(
         self,
-        files: InputData,
+        inputs: InputData,
         *,
         save_to: Path | str | None = None,
+        allow_explicit: bool = True,
+        allow_from_file: bool = True,
+        allow_search: bool = True,
     ) -> list[Path]:
-        """Return absolute active file paths from ``files``.
+        """Return absolute active file paths from ``inputs``.
 
         Args:
-            files: Run inputs — a path, ``SearchInput``, ``FromFileInput``, or a
+            inputs: Run inputs — a path, ``SearchInput``, ``FromFileInput``, or a
                 sequence of those.
-            save_to: Optional ``.txt`` path where the discovered active files are
+            save_to: Optional ``.txt`` path where the collected active files are
                 written (one path per line). ``None`` skips saving.
+            allow_explicit: Accept bare ``Path`` / ``str`` inputs.
+            allow_from_file: Accept ``mode: from_file`` mappings.
+            allow_search: Accept ``mode: search`` mappings.
 
         Returns:
             Deduplicated absolute file paths, preserving first-seen order.
@@ -55,48 +80,87 @@ class SupportsFileDiscovery:
         Raises:
             FileNotFoundError: If an explicit path or search root does not exist.
             ValueError: If an explicit path is not a file, a mapping is invalid,
-                discovery yields no files, or ``save_to`` is not a ``.txt`` path.
+                a disallowed input mode is present, collection yields no files,
+                or ``save_to`` is not a ``.txt`` path.
+            TypeError: If ``inputs`` is the wrong type or a search mapping is
+                missing ``explorer_params``.
             RuntimeError: If no data explorer can be built for a search input.
         """
         log = getattr(self, "log", None)
         if not callable(log):
             raise AttributeError(
                 f"{type(self).__name__} must inherit from ProcessingWorkflow; "
-                "SupportsFileDiscovery relies on its log() method."
+                "SupportsInputDiscovery relies on its log() method."
             )
 
-        if isinstance(files, (str, Path, dict)):
-            items: list[Any] = [files]
-        elif isinstance(files, Sequence):
-            items = list(files)
+        for name, value in (
+            ("allow_explicit", allow_explicit),
+            ("allow_from_file", allow_from_file),
+            ("allow_search", allow_search),
+        ):
+            if not isinstance(value, bool):
+                raise TypeError(
+                    f"`{name}` must be a boolean, got {type(value).__name__}"
+                )
+        if not (allow_explicit or allow_from_file or allow_search):
+            raise ValueError(
+                "At least one of `allow_explicit`, `allow_from_file`, or "
+                "`allow_search` must be True"
+            )
+
+        if isinstance(inputs, (str, Path, dict)):
+            items: list[Any] = [inputs]
+        elif isinstance(inputs, Sequence):
+            items = list(inputs)
         else:
             raise TypeError(
-                f"`files` must be a path, mapping, or sequence of either; "
-                f"got {type(files).__name__}"
+                f"`inputs` must be a path, mapping, or sequence of either; "
+                f"got {type(inputs).__name__}"
             )
         if not items:
-            raise ValueError("`files` must be non-empty")
+            raise ValueError("`inputs` must be non-empty")
 
         found: list[Path] = []
         for item in items:
             if isinstance(item, (str, Path)):
-                resolved = resolve_path(item)
-                if not resolved.exists():
-                    raise FileNotFoundError(resolved)
-                if not resolved.is_file():
+                if not allow_explicit:
                     raise ValueError(
-                        f"Explicit run input must be a file, got directory {resolved}"
+                        "Explicit path inputs are not allowed (`allow_explicit=False`)"
                     )
-                found.append(resolved)
+                found.append(self.collect_explicit_active_file(item))
                 continue
 
             if isinstance(item, dict):
                 mode = item.get("mode")
                 if mode == "search":
-                    found.extend(self._search_files(item))
+                    if not allow_search:
+                        raise ValueError(
+                            "search inputs are not allowed (`allow_search=False`)"
+                        )
+                    found.extend(
+                        self.search_active_files(
+                            item.get("roots"),  # type: ignore[arg-type]
+                            item.get("explorer_params"),  # type: ignore[arg-type]
+                        )
+                    )
                     continue
                 if mode == "from_file":
-                    found.extend(self._read_paths_from_file(item))
+                    if not allow_from_file:
+                        raise ValueError(
+                            "from_file inputs are not allowed (`allow_from_file=False`)"
+                        )
+                    path = item.get("path")
+                    if path is None or not isinstance(path, (str, Path)):
+                        raise ValueError("`from_file` input requires `path`")
+                    found.extend(
+                        self.collect_active_files_from_file(
+                            path,
+                            strict=item.get("strict", True),
+                            skip_resolve_filepaths=item.get(
+                                "skip_resolve_filepaths", False
+                            ),
+                        )
+                    )
                     continue
                 raise ValueError(
                     f"Unknown/missing run-input mode {mode!r}; expected 'search' or 'from_file'"
@@ -124,11 +188,50 @@ class SupportsFileDiscovery:
 
         return unique
 
-    def _search_files(self, config: dict[str, Any]) -> list[Path]:
-        """Search for files under one or more roots using a `nifti_finder` data
-        explorer."""
-        roots = config.get("roots")
-        explorer_params = config.get("explorer_params")
+    def collect_explicit_active_file(self, path: Path | str) -> Path:
+        """Resolve one explicit active file path and require that it exists."""
+        resolved = resolve_path(path)
+        if not resolved.exists():
+            raise FileNotFoundError(resolved)
+        if not resolved.is_file():
+            raise ValueError(
+                f"Explicit run input must be a file, got directory {resolved}"
+            )
+        return resolved
+
+    def collect_active_files_from_file(
+        self,
+        path: Path | str,
+        *,
+        strict: bool = True,
+        skip_resolve_filepaths: bool = False,
+    ) -> list[Path]:
+        """Read active file paths from a ``.txt`` listing (one path per line)."""
+        if not isinstance(path, (str, Path)):
+            raise ValueError("`from_file` input requires `path`")
+        return read_paths_from_file(
+            path,
+            strict=strict,
+            skip_resolve_filepaths=skip_resolve_filepaths,
+        )
+
+    def search_active_files(
+        self,
+        roots: Path | str | Sequence[Path | str],
+        explorer_params: NiftiFinderConfig,
+    ) -> list[Path]:
+        """Search for active files under one or more roots with a FileFinder config.
+
+        ``explorer_params`` is a :class:`~niiflow.preproc.data.types.NiftiFinderConfig`
+        forwarded to :func:`~niiflow.preproc.data.get_data_explorer`.
+        """
+        log = getattr(self, "log", None)
+        if not callable(log):
+            raise AttributeError(
+                f"{type(self).__name__} must inherit from ProcessingWorkflow; "
+                "SupportsInputDiscovery relies on its log() method."
+            )
+
         if roots is None:
             raise ValueError("`search` input requires `roots`")
         if not isinstance(explorer_params, dict):
@@ -163,18 +266,11 @@ class SupportsFileDiscovery:
                 raise FileNotFoundError(root_path)
             if not root_path.is_dir():
                 raise ValueError(f"Search root must be a directory, got {root_path}")
-            self.log(f"Extracting files using data explorer for {root_path}...")  # type: ignore[attr-defined]
+            log(f"Extracting files using data explorer for {root_path}...")
             result = explorer.list(root_path, sort=True, unique=True)
-            self.log(f"Found {len(result)} unique files under {root_path}.")  # type: ignore[attr-defined]
+            log(f"Found {len(result)} unique files under {root_path}.")
             found.extend(result)
         return found
-
-    def _read_paths_from_file(self, config: dict[str, Any]) -> list[Path]:
-        """Read file paths from a text file."""
-        filepath = config.get("path")
-        if filepath is None or not isinstance(filepath, (str, Path)):
-            raise ValueError("`from_file` input requires `path`")
-        return read_paths_from_file(filepath, strict=True)
 
 
 class SupportsStaging:
@@ -190,8 +286,15 @@ class SupportsStaging:
     ``entry_params`` in place (for example resolving file pointers). The concrete
     workflow decides what goes into ``entry_params``.
 
-    ``staging_params`` optionally configure a stager chain via
-    :func:`~niiflow.preproc.staging.create_stager`.
+    ``staging_params`` optionally configure a user stager chain via
+    :func:`~niiflow.preproc.staging.create_stager`. The workflow always bookends
+    that chain with
+    :class:`~niiflow.preproc.staging.ResolveActiveReferences` and
+    :class:`~niiflow.preproc.staging.ResolveParamReferences` (even when
+    ``staging_params`` is ``None``), so ``{active.*}`` / leftover ``{params.*}``
+    in ``entry_params`` are expanded consistently. Active existence is not
+    enforced here; place
+    :class:`~niiflow.preproc.staging.EnsureActiveExists` in the chain when needed.
 
     Intended for use as a mixin on :class:`~niiflow.preproc.workflows.workflow.PlannableWorkflow`
     subclasses, which provide :meth:`~niiflow.preproc.workflows.workflow.PlannableWorkflow.log`.
@@ -206,9 +309,14 @@ class SupportsStaging:
 
         To be used in the constructor of a
         :class:`~niiflow.preproc.workflows.workflow.PlannableWorkflow` subclass.
+
+        Args:
+            staging_params: Optional stager specs for
+                :func:`~niiflow.preproc.staging.create_stager`.
+            entry_params: Params attached to each entry before stagers run.
         """
         if staging_params is None:
-            self._stagers: list[Stager] = []
+            user_stagers: list[Stager] = []
             self._staging_params: list[dict[str, Any]] = []
         else:
             if not isinstance(staging_params, (list, dict)):
@@ -224,18 +332,21 @@ class SupportsStaging:
             if not all(isinstance(item, dict) for item in specs):
                 raise ValueError("Each `staging_params` item must be a dictionary")
 
-            stagers: list[Stager] = []
+            user_stagers = []
             staging_specs: list[dict[str, Any]] = []
             for spec in specs:
                 stager_name = spec.get("stager_name", "FileStager")
                 stager_params = spec.get("params")
-                stagers.append(create_stager(stager_name, stager_kwargs=stager_params))
+                user_stagers.append(
+                    create_stager(stager_name, stager_kwargs=stager_params)
+                )
                 staging_specs.append(
                     {"stager_name": stager_name, "params": stager_params}
                 )
 
-            self._stagers = stagers
             self._staging_params = staging_specs
+
+        self._stagers = add_reference_staging_bookends(user_stagers)
 
         if entry_params is None:
             self._entry_params: dict[str, Any] | list[dict[str, Any]] = {}

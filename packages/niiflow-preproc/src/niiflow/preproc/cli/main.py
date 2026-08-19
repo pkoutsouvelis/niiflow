@@ -6,7 +6,7 @@ keyword arguments, and dispatches via :func:`niiflow.preproc.cli.commands.run`.
 Registered commands (see :data:`~niiflow.preproc.cli.commands.COMMANDS`):
 
 ``dynamic_workflow``
-    Plan and/or execute a :class:`~niiflow.preproc.workflows.DynamicPreprocessingWorkflow`
+    Plan and/or execute a :class:`~niiflow.preproc.workflows.DynamicProcessingWorkflow`
     from driver kwargs in the config (``settings``, ``inputs``, ``from_plan``,
     ``plan_only``, ``dry_run``, save paths, etc.).
 """

@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from niiflow.preproc.staging import StagedEntry, StagingErrorRecord
-from niiflow.preproc.workflows import DynamicPreprocessingWorkflow, RunPlan
+from niiflow.preproc.workflows import DynamicProcessingWorkflow, RunPlan
 
 
 def _entry(
@@ -142,6 +142,124 @@ class TestRunPlanScale:
         assert loaded.entries[-1].active.name == "img-0999.nii.gz"
 
 
+def _indexed_plan(tmp_path: Path, n: int = 5) -> RunPlan:
+    return RunPlan(
+        entries=tuple(
+            _entry(tmp_path / f"img-{index:02d}.nii.gz") for index in range(n)
+        )
+    )
+
+
+class TestRunPlanSlice:
+    def test_selects_inclusive_exclusive_window(self, tmp_path: Path) -> None:
+        plan = _indexed_plan(tmp_path)
+        selected = plan.slice(start=1, end=4)
+
+        assert [entry.active.name for entry in selected.entries] == [
+            "img-01.nii.gz",
+            "img-02.nii.gz",
+            "img-03.nii.gz",
+        ]
+
+    def test_supports_negative_bounds(self, tmp_path: Path) -> None:
+        plan = _indexed_plan(tmp_path)
+        assert [e.active.name for e in plan.slice(start=-2).entries] == [
+            "img-03.nii.gz",
+            "img-04.nii.gz",
+        ]
+        assert [e.active.name for e in plan.slice(end=-1).entries] == [
+            "img-00.nii.gz",
+            "img-01.nii.gz",
+            "img-02.nii.gz",
+            "img-03.nii.gz",
+        ]
+
+    def test_full_range_returns_same_instance(self, tmp_path: Path) -> None:
+        plan = _indexed_plan(tmp_path)
+        assert plan.slice() is plan
+
+    def test_includes_staging_failed_entries(self, tmp_path: Path) -> None:
+        plan = _sample_plan(tmp_path)
+        assert len(plan.slice(start=0, end=2).entries) == 2
+        assert plan.slice(start=1, end=2).entries[0].errors
+
+    def test_rejects_out_of_range(self, tmp_path: Path) -> None:
+        plan = _indexed_plan(tmp_path)
+        with pytest.raises(ValueError, match="`start`"):
+            plan.slice(start=6)
+        with pytest.raises(ValueError, match="`end`"):
+            plan.slice(end=6)
+        with pytest.raises(ValueError, match="must not precede"):
+            plan.slice(start=3, end=1)
+
+    def test_rejects_non_int_bounds(self, tmp_path: Path) -> None:
+        plan = _indexed_plan(tmp_path)
+        with pytest.raises(TypeError, match="`start`"):
+            plan.slice(start=True)  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="`end`"):
+            plan.slice(end=1.5)  # type: ignore[arg-type]
+
+    def test_getitem_aliases_slice(self, tmp_path: Path) -> None:
+        plan = _indexed_plan(tmp_path)
+        assert [e.active.name for e in plan[1:4].entries] == [
+            e.active.name for e in plan.slice(1, 4).entries
+        ]
+        assert [e.active.name for e in plan[-2:].entries] == [
+            e.active.name for e in plan.slice(start=-2).entries
+        ]
+        assert [e.active.name for e in plan[:].entries] == [
+            e.active.name for e in plan.entries
+        ]
+        assert plan[:] is plan
+
+    def test_getitem_single_index_returns_one_entry_plan(self, tmp_path: Path) -> None:
+        plan = _indexed_plan(tmp_path)
+        assert [e.active.name for e in plan[2].entries] == ["img-02.nii.gz"]
+        assert [e.active.name for e in plan[-1].entries] == ["img-04.nii.gz"]
+
+    def test_getitem_rejects_step(self, tmp_path: Path) -> None:
+        plan = _indexed_plan(tmp_path)
+        with pytest.raises(ValueError, match="step"):
+            _ = plan[0:4:2]
+
+
+@pytest.mark.parametrize("suffix", [".duckdb", ".json"])
+class TestRunPlanLoadRange:
+    def test_load_range_matches_slice(self, tmp_path: Path, suffix: str) -> None:
+        plan = _indexed_plan(tmp_path)
+        plan_path = tmp_path / f"job{suffix}"
+        plan.save(plan_path)
+
+        loaded = RunPlan.load(plan_path, start=1, end=4)
+        assert [entry.active.name for entry in loaded.entries] == [
+            entry.active.name for entry in plan.slice(start=1, end=4).entries
+        ]
+
+    def test_load_range_negative_bounds(self, tmp_path: Path, suffix: str) -> None:
+        plan = _indexed_plan(tmp_path)
+        plan_path = tmp_path / f"job{suffix}"
+        plan.save(plan_path)
+
+        loaded = RunPlan.load(plan_path, start=-2, end=-1)
+        assert [entry.active.name for entry in loaded.entries] == ["img-03.nii.gz"]
+
+    def test_load_empty_range(self, tmp_path: Path, suffix: str) -> None:
+        plan = _indexed_plan(tmp_path)
+        plan_path = tmp_path / f"job{suffix}"
+        plan.save(plan_path)
+
+        loaded = RunPlan.load(plan_path, start=2, end=2)
+        assert loaded.entries == ()
+
+    def test_load_rejects_out_of_range(self, tmp_path: Path, suffix: str) -> None:
+        plan = _indexed_plan(tmp_path)
+        plan_path = tmp_path / f"job{suffix}"
+        plan.save(plan_path)
+
+        with pytest.raises(ValueError, match="`start`"):
+            RunPlan.load(plan_path, start=10)
+
+
 class TestRunPlanWorkflowIntegration:
     def test_plan_save_load_run(
         self,
@@ -151,7 +269,7 @@ class TestRunPlanWorkflowIntegration:
         active = tmp_path / "input.nii.gz"
         active.write_bytes(b"nii")
         output = tmp_path / "out" / "result.txt"
-        wf = DynamicPreprocessingWorkflow(
+        wf = DynamicProcessingWorkflow(
             staging_params={
                 "stager_name": "FileStager",
                 "params": {"pointers": {"output_path": "output"}},

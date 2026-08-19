@@ -1,6 +1,7 @@
 """Functional operations on numpy arrays."""
 
 __all__ = [
+    "pointwise_arithmetic",
     "clamp_intensities",
     "z_transform_norm",
     "minmax_norm",
@@ -14,6 +15,7 @@ __all__ = [
     "relabel_mask",
 ]
 
+from .arithmetic import pointwise_arithmetic
 from .croppad import (
     bbox_from_mask,
     center_crop,

@@ -77,3 +77,30 @@ class TestReadPathsFromFile:
         list_file = _write_list(tmp_path / "files.txt", [])
         with pytest.raises(TypeError, match="strict"):
             read_paths_from_file(list_file, strict="yes")  # type: ignore[arg-type]
+
+    def test_skip_resolve_filepaths_keeps_listed_form(self, tmp_path: Path) -> None:
+        a = tmp_path / "a.nii.gz"
+        a.write_bytes(b"")
+        listed = str(a)  # absolute under tmp_path, but not .resolve()'d
+        list_file = _write_list(tmp_path / "files.txt", [listed])
+
+        paths = read_paths_from_file(list_file, skip_resolve_filepaths=True)
+
+        assert paths == [Path(listed)]
+        assert paths[0] == a
+
+    def test_default_resolves_listed_paths(self, tmp_path: Path) -> None:
+        a = tmp_path / "a.nii.gz"
+        a.write_bytes(b"")
+        list_file = _write_list(tmp_path / "files.txt", [str(a)])
+
+        paths = read_paths_from_file(list_file)
+
+        assert paths == [a.resolve()]
+
+    def test_rejects_non_bool_skip_resolve_filepaths(self, tmp_path: Path) -> None:
+        list_file = _write_list(tmp_path / "files.txt", [])
+        with pytest.raises(TypeError, match="skip_resolve_filepaths"):
+            read_paths_from_file(
+                list_file, skip_resolve_filepaths="yes"  # type: ignore[arg-type]
+            )

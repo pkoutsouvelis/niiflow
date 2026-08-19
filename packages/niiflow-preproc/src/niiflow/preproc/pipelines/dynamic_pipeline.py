@@ -13,8 +13,8 @@ from niiflow.preproc.pipelines.pipeline_stages import (
     Compose,
     PipelineStage,
     RuntimeContext,
-    create_stage,
-    discover_stage_classes,
+    create_pipeline_stage,
+    discover_pipeline_stage_classes,
 )
 
 _VALID_PIPELINE_KEYS_LIST = frozenset({"steps", "verbose"})
@@ -32,7 +32,7 @@ def _stage_from_spec(
 
     Validates the step-spec shape — the config format owned by this module — then
     delegates class lookup and construction to
-    :func:`~niiflow.preproc.pipelines.pipeline_stages.create_stage`.
+    :func:`~niiflow.preproc.pipelines.pipeline_stages.create_pipeline_stage`.
     """
     if isinstance(step_spec, PipelineStage):
         raise TypeError(
@@ -47,17 +47,25 @@ def _stage_from_spec(
     if "name" not in step_spec:
         raise ValueError(f"Step {step_label!r} is missing required key 'name'.")
 
-    stage_name = step_spec["name"]
-    stage_kwargs = {key: value for key, value in step_spec.items() if key != "name"}
+    pipeline_stage_name = step_spec["name"]
+    pipeline_stage_kwargs = {
+        key: value for key, value in step_spec.items() if key != "name"
+    }
 
-    stage_cls = registry.get(stage_name) if isinstance(stage_name, str) else None
-    if stage_cls is not None:
-        sig = inspect.signature(stage_cls.__init__)
-        if "verbose" in sig.parameters and "verbose" not in stage_kwargs:
-            stage_kwargs["verbose"] = default_verbose
+    pipeline_stage_cls = (
+        registry.get(pipeline_stage_name)
+        if isinstance(pipeline_stage_name, str)
+        else None
+    )
+    if pipeline_stage_cls is not None:
+        sig = inspect.signature(pipeline_stage_cls.__init__)
+        if "verbose" in sig.parameters and "verbose" not in pipeline_stage_kwargs:
+            pipeline_stage_kwargs["verbose"] = default_verbose
 
     try:
-        return create_stage(stage_name, stage_kwargs, registry=registry)
+        return create_pipeline_stage(
+            pipeline_stage_name, pipeline_stage_kwargs, registry=registry
+        )
     except TypeError as exc:
         raise TypeError(f"{exc} (step {step_label!r})") from exc
 
@@ -183,7 +191,7 @@ def dynamic_pipeline(pipeline_spec: dict[str, Any], run_id: str | None = None) -
         )
 
     steps, step_ids = _normalize_pipeline(pipeline_spec)
-    registry = discover_stage_classes()
+    registry = discover_pipeline_stage_classes()
 
     built = [
         _stage_from_spec(

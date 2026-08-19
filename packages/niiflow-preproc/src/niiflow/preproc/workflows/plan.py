@@ -87,12 +87,57 @@ def _read_plan_version(meta: dict[str, str]) -> None:
         raise ValueError(f"Unsupported plan version {version}; expected {PLAN_VERSION}")
 
 
+def _resolve_entry_bounds(start: int, end: int | None, count: int) -> tuple[int, int]:
+    """Normalize negative ``start`` / ``end`` and validate the resolved range.
+
+    Bounds use Python-slice semantics (``start`` inclusive, ``end`` exclusive) over plan
+    entry indices, including entries that carry staging errors. Out-of-range bounds
+    raise instead of silently clamping.
+    """
+    if not isinstance(start, int) or isinstance(start, bool):
+        raise TypeError(f"`start` must be an int, got {type(start).__name__}")
+    if end is not None and (not isinstance(end, int) or isinstance(end, bool)):
+        raise TypeError(f"`end` must be an int or None, got {type(end).__name__}")
+
+    start_index = start + count if start < 0 else start
+    end_index = count if end is None else (end + count if end < 0 else end)
+
+    if not 0 <= start_index <= count:
+        raise ValueError(
+            f"`start` {start!r} is out of range for {count} entr"
+            f"{'y' if count == 1 else 'ies'}; resolved to index {start_index}, "
+            f"expected 0..{count}"
+        )
+    if not 0 <= end_index <= count:
+        raise ValueError(
+            f"`end` {end!r} is out of range for {count} entr"
+            f"{'y' if count == 1 else 'ies'}; resolved to index {end_index}, "
+            f"expected 0..{count}"
+        )
+    if end_index < start_index:
+        raise ValueError(
+            f"`end` {end!r} (resolved index {end_index}) must not precede "
+            f"`start` {start!r} (resolved index {start_index})"
+        )
+    return start_index, end_index
+
+
+def _plan_suffix(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix not in {".json", ".duckdb"}:
+        raise ValueError(
+            f"Unsupported plan file extension {suffix!r}; use '.duckdb' or '.json'"
+        )
+    return suffix
+
+
 @dataclass(frozen=True)
 class RunPlan:
     """Staged entries ready for execution.
 
     Inspect with :meth:`view`, persist with :meth:`save` (``.duckdb`` for production
-    scale, ``.json`` for debug), and reload with :meth:`load`.
+    scale, ``.json`` for debug), and reload with :meth:`load`. Use :meth:`slice` or
+    ranged :meth:`load` to select a contiguous window of plan entry indices.
     """
 
     entries: tuple[StagedEntry, ...]
@@ -131,6 +176,42 @@ class RunPlan:
 
         return "\n".join(lines)
 
+    def slice(self, start: int = 0, end: int | None = None) -> RunPlan:
+        """Return a plan containing entries ``[start:end]`` by plan index.
+
+        Indices include staging-failed entries and use the same bound rules as
+        :meth:`load` (inclusive ``start``, exclusive ``end``, negative indexing, strict
+        out-of-range errors).
+
+        ``plan[start:end]`` is an alias for ``plan.slice(start, end)``.
+        """
+        start_index, end_index = _resolve_entry_bounds(start, end, len(self.entries))
+        if start_index == 0 and end_index == len(self.entries):
+            return self
+        return RunPlan(entries=self.entries[start_index:end_index])
+
+    def __getitem__(self, key: int | slice) -> RunPlan:
+        """Alias for :meth:`slice` using standard indexing / slicing syntax.
+
+        ``plan[i:j]`` is equivalent to ``plan.slice(i, j)``. A single index ``plan[i]``
+        returns a one-entry plan (not a bare :class:`StagedEntry`). Step values other
+        than ``1`` are not supported.
+        """
+        if isinstance(key, slice):
+            if key.step not in (None, 1):
+                raise ValueError(
+                    f"RunPlan slicing does not support step={key.step!r}; use step 1"
+                )
+            start = 0 if key.start is None else key.start
+            return self.slice(start=start, end=key.stop)
+        if isinstance(key, bool) or not isinstance(key, int):
+            raise TypeError(
+                f"RunPlan indices must be integers or slices, got {type(key).__name__}"
+            )
+        if key < 0:
+            return self.slice(start=key, end=None if key == -1 else key + 1)
+        return self.slice(start=key, end=key + 1)
+
     def save(self, path: Path | str) -> Path:
         """Write this plan to ``path``.
 
@@ -138,29 +219,32 @@ class RunPlan:
         """
         resolved = resolve_path(path)
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        suffix = resolved.suffix.lower()
+        suffix = _plan_suffix(resolved)
         if suffix == ".json":
             return self._save_json(resolved)
-        if suffix == ".duckdb":
-            return self._save_duckdb(resolved)
-        raise ValueError(
-            f"Unsupported plan file extension {suffix!r}; use '.duckdb' or '.json'"
-        )
+        return self._save_duckdb(resolved)
 
     @classmethod
-    def load(cls, path: Path | str) -> RunPlan:
-        """Load a plan previously written with :meth:`save`."""
+    def load(
+        cls,
+        path: Path | str,
+        *,
+        start: int = 0,
+        end: int | None = None,
+    ) -> RunPlan:
+        """Load a plan previously written with :meth:`save`.
+
+        Optional ``start`` / ``end`` select a contiguous window of plan entry indices
+        (including staging-failed entries). For ``.duckdb`` plans only the selected rows
+        are materialized; ``.json`` plans are parsed then sliced.
+        """
         resolved = resolve_path(path)
         if not resolved.is_file():
             raise FileNotFoundError(resolved)
-        suffix = resolved.suffix.lower()
+        suffix = _plan_suffix(resolved)
         if suffix == ".json":
-            return cls._load_json(resolved)
-        if suffix == ".duckdb":
-            return cls._load_duckdb(resolved)
-        raise ValueError(
-            f"Unsupported plan file extension {suffix!r}; use '.duckdb' or '.json'"
-        )
+            return cls._load_json(resolved, start=start, end=end)
+        return cls._load_duckdb(resolved, start=start, end=end)
 
     def _save_json(self, path: Path) -> Path:
         return write_json(
@@ -176,13 +260,21 @@ class RunPlan:
         )
 
     @classmethod
-    def _load_json(cls, path: Path) -> RunPlan:
+    def _load_json(
+        cls,
+        path: Path,
+        *,
+        start: int = 0,
+        end: int | None = None,
+    ) -> RunPlan:
         payload = read_json(path)
         _read_plan_version({"plan_version": str(payload.get("plan_version", ""))})
         entries = payload.get("entries")
         if not isinstance(entries, list):
             raise TypeError("Plan document must contain an `entries` list")
-        return cls(entries=tuple(_entry_from_record(item) for item in entries))
+        start_index, end_index = _resolve_entry_bounds(start, end, len(entries))
+        selected = entries[start_index:end_index]
+        return cls(entries=tuple(_entry_from_record(item) for item in selected))
 
     def _save_duckdb(self, path: Path) -> Path:
         if path.exists():
@@ -232,19 +324,32 @@ class RunPlan:
         return path
 
     @classmethod
-    def _load_duckdb(cls, path: Path) -> RunPlan:
+    def _load_duckdb(
+        cls,
+        path: Path,
+        *,
+        start: int = 0,
+        end: int | None = None,
+    ) -> RunPlan:
         conn = duckdb.connect(str(path), read_only=True)
         try:
             meta_rows = conn.execute("SELECT key, value FROM meta").fetchall()
             meta = {row[0]: row[1] for row in meta_rows}
             _read_plan_version(meta)
 
-            rows = conn.execute(\
-                                """
-                SELECT entry_index, active, params, errors
-                FROM entries
-                ORDER BY entry_index
-                """).fetchall()
+            count_row = conn.execute("SELECT COUNT(*) FROM entries").fetchone()
+            count = int(count_row[0]) if count_row is not None else 0
+            start_index, end_index = _resolve_entry_bounds(start, end, count)
+
+            rows = conn.execute(
+                """SELECT entry_index, active, params, errors FROM entries WHERE
+                entry_index >= ?
+
+                AND entry_index < ? ORDER BY entry_index
+                """
+                   ,
+                [start_index, end_index],
+            ).fetchall()
         finally:
             conn.close()
 

@@ -1,5 +1,6 @@
 """Functional operations on ANTsImage objects."""
 
+from .arithmetic import pointwise_arithmetic
 from .bias_field import ants_bias_field_correction
 from .croppad import (
     bbox_from_mask,
@@ -17,7 +18,11 @@ from .intensity_normalization import (
 )
 from .masks import ants_apply_mask, relabel_mask, smooth_mask
 from .pipelines import ants_preprocess_brain_image
-from .registration import ants_apply_transforms, ants_registration
+from .registration import (
+    ants_apply_transforms,
+    ants_registration,
+    ants_similarity_metrics,
+)
 from .reorientation import ants_reorient
 from .resampling import ants_resample, ants_resample_to_target
 from .skull_stripping import ants_brain_extraction
@@ -26,6 +31,7 @@ __all__ = [
     "ants_apply_transforms",
     "ants_bias_field_correction",
     "ants_brain_extraction",
+    "pointwise_arithmetic",
     "clamp_intensities",
     "z_transform_norm",
     "minmax_norm",
@@ -41,6 +47,7 @@ __all__ = [
     "relabel_mask",
     "ants_preprocess_brain_image",
     "ants_registration",
+    "ants_similarity_metrics",
     "ants_reorient",
     "ants_resample",
     "ants_resample_to_target",

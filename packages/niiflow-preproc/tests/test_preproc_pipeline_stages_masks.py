@@ -13,7 +13,8 @@ from niiflow.preproc.pipelines.pipeline_stages import (
     RuntimeContext,
     SmoothMask,
 )
-from stage_helpers import make_stage, step_ctx
+from test_preproc_pipeline_stages_base import step_ctx
+from test_preproc_pipeline_stages_shipped_shared import make_stage
 
 
 @pytest.fixture

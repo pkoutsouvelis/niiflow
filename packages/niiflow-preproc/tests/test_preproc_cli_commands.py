@@ -11,7 +11,7 @@ import pytest
 from niiflow.preproc.cli.commands import COMMANDS, run
 from niiflow.preproc.config import load_config
 from niiflow.preproc.staging import StagedEntry
-from niiflow.preproc.workflows import DynamicPreprocessingWorkflow, RunPlan
+from niiflow.preproc.workflows import DynamicProcessingWorkflow, RunPlan
 from niiflow.preproc.workflows.dynamic_workflow import dynamic_workflow
 
 
@@ -63,7 +63,7 @@ class TestRunDynamicWorkflow:
         file_path = tmp_path / "img.nii.gz"
         file_path.write_bytes(b"")
         monkeypatch.setattr(
-            DynamicPreprocessingWorkflow, "process_single", staticmethod(_touch)
+            DynamicProcessingWorkflow, "process_single", staticmethod(_touch)
         )
 
         run("dynamic_workflow", _config(tmp_path, file_path))
@@ -76,7 +76,7 @@ class TestRunDynamicWorkflow:
         file_path.write_bytes(b"")
         plan_path = tmp_path / "plans" / "job.duckdb"
         monkeypatch.setattr(
-            DynamicPreprocessingWorkflow, "process_single", staticmethod(_touch)
+            DynamicProcessingWorkflow, "process_single", staticmethod(_touch)
         )
 
         run(
@@ -100,7 +100,7 @@ class TestRunDynamicWorkflow:
         file_path.write_bytes(b"")
         plan_path = tmp_path / "artifacts" / "job.duckdb"
         monkeypatch.setattr(
-            DynamicPreprocessingWorkflow, "process_single", staticmethod(_touch)
+            DynamicProcessingWorkflow, "process_single", staticmethod(_touch)
         )
 
         run(
@@ -121,7 +121,7 @@ class TestRunDynamicWorkflow:
         file_path.write_bytes(b"")
         plan_path = tmp_path / "job.duckdb"
         monkeypatch.setattr(
-            DynamicPreprocessingWorkflow, "process_single", staticmethod(_touch)
+            DynamicProcessingWorkflow, "process_single", staticmethod(_touch)
         )
         run(
             "dynamic_workflow",
@@ -156,7 +156,7 @@ class TestRunDynamicWorkflow:
             _config(tmp_path, file_path, save_plan_to=plan_path, plan_only=True),
         )
         monkeypatch.setattr(
-            DynamicPreprocessingWorkflow, "process_single", staticmethod(_touch)
+            DynamicProcessingWorkflow, "process_single", staticmethod(_touch)
         )
 
         run("dynamic_workflow", load_config(config_path))

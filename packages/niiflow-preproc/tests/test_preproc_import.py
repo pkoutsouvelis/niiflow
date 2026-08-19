@@ -1,7 +1,7 @@
 def test_import_preproc() -> None:
     import niiflow.preproc as preproc
 
-    assert preproc.DynamicPreprocessingWorkflow is not None
+    assert preproc.DynamicProcessingWorkflow is not None
     assert preproc.RunPlan is not None
     assert preproc.dynamic_pipeline is not None
     assert preproc.dynamic_workflow is not None

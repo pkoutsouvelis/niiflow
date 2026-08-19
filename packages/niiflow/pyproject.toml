@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "niiflow"
-version = "0.2.0"
+version = "0.1.0"
 description = "niiflow — configurable workflows for deep learning-based neuroimaging analyses (meta package)."
 requires-python = ">=3.11"
 license = "MIT"
 readme = "README.md"
 authors = [{ name = "Petros Koutsouvelis" }]
 dependencies = [
-    "niiflow-core",
+    "niiflow-train",
     "niiflow-preproc",
 ]
 
@@ -22,7 +22,7 @@ niiflow = "niiflow.__main__:main"
 test = ["pytest>=7.0"]
 
 [tool.uv.sources]
-niiflow-core = { workspace = true }
+niiflow-train = { workspace = true }
 niiflow-preproc = { workspace = true }
 
 [tool.setuptools]

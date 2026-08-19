@@ -16,7 +16,7 @@ from niiflow.preproc.utils.misc import (
     set_by_dotted_path,
 )
 from niiflow.preproc.utils.file import resolve_path
-from .dynamic import resolve_dynamic_refs
+from .dynamic_referencing import resolve_dynamic_refs
 from .search import (
     match_parent,
     mirror_root,
@@ -25,7 +25,7 @@ from .search import (
     resolve_search_result,
 )
 from .stager import (
-    StageContext,
+    StagingContext,
     StagedEntry,
     Stager,
     FileStagingError,
@@ -35,6 +35,7 @@ from .types import (
     OutputSpec,
     PointerKind,
     RootSpec,
+    SingleRootSpec,
 )
 from .validation import (
     ensure_file,
@@ -50,26 +51,34 @@ from .validation import (
 class FileStager(Stager):
     """Resolve input/output file parameters around stable active files.
 
-    A :class:`FileStager` walks declared *pointers* (dotted paths into each
-    entry's ``params`` dict) and materialises file paths before pipeline
-    execution. The entry's :attr:`~niiflow.preproc.staging.stager.StagedEntry.active`
-    path is the stable run anchor; it is never rewritten by staging.
+    A :class:`FileStager` materialises file paths in each entry's pipeline
+    parameters before pipeline execution. It does not modify the entry's
+    :attr:`~niiflow.preproc.staging.stager.StagedEntry.active` path, which is
+    treated as its stable anchor for the run. The active path need not exist;
+    existence checks apply to declared input pointers (see
+    ``ensure_inputs_exist``) and to search roots.
 
-    Construction accepts a ``pointers`` mapping from dotted parameter paths to
-    either ``"input"`` or ``"output"``. Input pointers are resolved first so
-    output templates can reference them via ``{params.<dotted-path>}`` dynamic
-    references. String specs may also use ``{active.<attr>}`` (``path``, ``name``,
-    ``stem``, ``parent``).
+    Pointers are a construction-time map from dotted ``params`` paths to
+    ``"input"`` or ``"output"``. Declared paths are resolved into concrete file
+    locations (search / path join / existence checks). ``None`` or ``{}`` means
+    no file pointers.
 
-    ``pointers`` may be omitted (or ``None``) to stage with dynamic references
-    only: every ``{active.*}`` and ``{params.*}`` reference in ``params`` is still
-    expanded, but no parameter is treated as a file to resolve or materialise.
+    Dynamic references (``{active.*}``, ``{params.*}``) are a separate concern.
+    Prefer running :class:`~niiflow.preproc.staging.dynamic_referencing.ResolveActiveReferences`
+    before this stager and
+    :class:`~niiflow.preproc.staging.dynamic_referencing.ResolveParamReferences` after (see
+    :func:`~niiflow.preproc.staging.dynamic_referencing.add_reference_staging_bookends`). Within this
+    stager, ``{params.*}`` are expanded only on each input/output pointer spec
+    immediately before that pointer is materialised.
+
+    Bare relative ``str`` / ``Path`` input and output specs are anchored to
+    ``active.parent`` (same default as omitting ``root``, or omitting ``mode``
+    on a structured root spec); absolute paths are left unchanged.
 
     Args:
         pointers:
-            Mapping from dotted parameter paths to either ``"input"`` or ``"output"``.
-            ``None`` and ``{}`` both mean "no pointers"; dynamic references are
-            still resolved.
+            Mapping from dotted parameter paths to either ``"input"`` or
+            ``"output"``. ``None`` and ``{}`` both mean "no pointers".
 
         ensure_inputs_exist:
             When ``True``, direct input paths must exist and be files. Search-mode
@@ -112,29 +121,27 @@ class FileStager(Stager):
         current_kind: PointerKind | None = None
 
         try:
-            active = ensure_file(entry.active, must_exist=True)
-            ctx = StageContext(active=active)
+            active = ensure_file(entry.active, must_exist=False)
+            ctx = StagingContext(active=active)
 
-            # Pass 1: active refs can be resolved immediately; params refs are
-            # preserved so output templates can refer to inputs resolved below.
-            out_params = resolve_dynamic_refs(
-                out_params,
-                params=out_params,
-                ctx=ctx,
-                resolve_params=False,
-            )
-
-            # Inputs first: output specs may reference resolved input paths.
+            # Inputs first: expand params refs on each input spec, then materialize.
             for pointer, kind in self.pointers.items():
                 if kind != "input":
                     continue
                 current_pointer = pointer
                 current_kind = kind
                 spec = get_by_dotted_path(out_params, pointer)
+                spec = resolve_dynamic_refs(
+                    spec,
+                    params=out_params,
+                    ctx=ctx,
+                    resolve_params=True,
+                )
+                set_by_dotted_path(out_params, pointer, spec)
                 resolved = self.get_input_file(spec, ctx=ctx, pointer=pointer)
                 set_by_dotted_path(out_params, pointer, resolved)
 
-            # Outputs: expand params refs per pointer, then resolve paths.
+            # Outputs: expand params refs per pointer, then materialize paths.
             for pointer, kind in self.pointers.items():
                 if kind != "output":
                     continue
@@ -150,14 +157,6 @@ class FileStager(Stager):
                 set_by_dotted_path(out_params, pointer, spec)
                 resolved = self.get_output_path(spec, ctx=ctx, pointer=pointer)
                 set_by_dotted_path(out_params, pointer, resolved)
-
-            # Expand any remaining params refs outside declared output pointers.
-            out_params = resolve_dynamic_refs(
-                out_params,
-                params=out_params,
-                ctx=ctx,
-                resolve_params=True,
-            )
 
             return StagedEntry(
                 active=entry.active, params=out_params, errors=entry.errors
@@ -175,9 +174,15 @@ class FileStager(Stager):
                 message = f"Failed while staging active file {entry.active}: {exc}"
             raise FileStagingError(message) from exc
 
-    def get_root(self, spec: RootSpec, *, ctx: StageContext, must_exist: bool) -> Path:
+    def get_root(
+        self, spec: SingleRootSpec, *, ctx: StagingContext, must_exist: bool
+    ) -> Path:
         """Resolve one root directory from a
-        :data:`~niiflow.preproc.staging.types.RootSpec`."""
+        :data:`~niiflow.preproc.staging.types.SingleRootSpec`.
+
+        ``None`` and a mapping without ``mode`` both start from
+        ``ctx.active.parent``. ``mirror`` may still be applied on a mapping.
+        """
         if spec is None:
             return ensure_directory(ctx.active.parent, must_exist=must_exist)
 
@@ -193,13 +198,13 @@ class FileStager(Stager):
         check_allowed_keys(
             root_spec, {"mode", "value", "mirror", "selection"}, "Root spec"
         )
-        require_keys(root_spec, ["mode"], "Root spec")
 
-        mode = root_spec["mode"]
-        if mode == "active":
-            if "value" in root_spec and root_spec["value"] is not None:
+        mode = root_spec.get("mode")
+        if mode is None:
+            if root_spec.get("value") is not None:
                 raise ValueError(
-                    f"Root spec with mode='active' must not define a value: {root_spec!r}"
+                    "Root spec without mode must not define a value; "
+                    "omit value to use the active parent, or set mode='path'."
                 )
             result = ctx.active.parent
 
@@ -236,7 +241,7 @@ class FileStager(Stager):
 
         else:
             raise ValueError(
-                f"Unknown root mode {mode!r}. Expected one of: active, path, parent_up, parent_match."
+                f"Unknown root mode {mode!r}. Expected one of: path, parent_up, parent_match."
             )
 
         mirror = root_spec.get("mirror")
@@ -261,7 +266,7 @@ class FileStager(Stager):
         return ensure_directory(result, must_exist=must_exist)
 
     def get_roots(
-        self, spec: RootSpec, *, ctx: StageContext, must_exist: bool
+        self, spec: RootSpec, *, ctx: StagingContext, must_exist: bool
     ) -> list[Path]:
         """Resolve one or more root directories from a
         :data:`~niiflow.preproc.staging.types.RootSpec`."""
@@ -277,7 +282,7 @@ class FileStager(Stager):
         self,
         spec: InputSpec,
         *,
-        ctx: StageContext,
+        ctx: StagingContext,
         pointer: str | None = None,
     ) -> Path | list[Path]:
         """Resolve an :data:`~niiflow.preproc.staging.types.InputSpec` to one or more
@@ -286,7 +291,10 @@ class FileStager(Stager):
             return ensure_file(ctx.active, must_exist=self.ensure_inputs_exist)
 
         if isinstance(spec, (str, Path)):
-            return ensure_file(spec, must_exist=self.ensure_inputs_exist)
+            return ensure_file(
+                self._anchor_to_active(spec, ctx=ctx),
+                must_exist=self.ensure_inputs_exist,
+            )
 
         input_spec = require_mapping(spec, "Input spec")
         check_allowed_keys(
@@ -317,11 +325,16 @@ class FileStager(Stager):
             self._explorer_cache[key] = get_data_explorer(**search_spec)
         return self._explorer_cache[key]
 
+    @staticmethod
+    def _anchor_to_active(path: str | Path, *, ctx: StagingContext) -> Path:
+        """Anchor a relative path to ``ctx.active.parent``; leave absolutes as-is."""
+        return ctx.active.parent / Path(path)
+
     def get_output_path(
         self,
         spec: OutputSpec,
         *,
-        ctx: StageContext,
+        ctx: StagingContext,
         pointer: str | None = None,
     ) -> Path:
         """Resolve an :data:`~niiflow.preproc.staging.types.OutputSpec` to a target
@@ -334,7 +347,10 @@ class FileStager(Stager):
             raise ValueError(f"Output spec for pointer {pointer!r} cannot be None.")
 
         if isinstance(spec, (str, Path)):
-            return ensure_no_overwrite(spec, allow_overwrite=self.allow_overwrite)
+            return ensure_no_overwrite(
+                self._anchor_to_active(spec, ctx=ctx),
+                allow_overwrite=self.allow_overwrite,
+            )
 
         output_spec = require_mapping(spec, "Output spec")
         check_allowed_keys(output_spec, {"root", "name"}, "Output spec")

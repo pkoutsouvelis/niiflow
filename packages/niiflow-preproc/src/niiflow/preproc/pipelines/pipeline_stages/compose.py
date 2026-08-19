@@ -148,14 +148,19 @@ class Compose(PipelineStage):
     def _resolve_stage_entries(
         self, parent_step_id: str | None
     ) -> list[tuple[str | None, PipelineStage]]:
-        """Resolve stage entries as (step_id, stage) tuples, taking into account of the
-        parent step id."""
+        """Resolve stage entries as ``(step_id, stage)`` tuples.
+
+        When ``parent_step_id`` is set, every child is namespaced under it: explicit ids
+        become ``{parent}.{id}`` and bare (``None``) slots become ``{parent}.{index}``.
+        When the parent is ``None``, explicit ids are kept as-is and bare slots stay
+        ``None`` (auto-generated in the child :meth:`~PipelineStage.run`).
+        """
         entries: list[tuple[str | None, PipelineStage]] = []
         for index, (stage, step_id) in enumerate(zip(self.stages, self.step_ids)):
-            if step_id is not None:
+            if parent_step_id is None:
                 entries.append((step_id, stage))
-            elif parent_step_id is None:
-                entries.append((None, stage))
+            elif step_id is not None:
+                entries.append((f"{parent_step_id}.{step_id}", stage))
             else:
                 entries.append((f"{parent_step_id}.{index}", stage))
         return entries
@@ -249,8 +254,11 @@ class Compose(PipelineStage):
         auto-generated child is ``step_{n:04d}``, the second ``step_{n+1:04d}``,
         and so on.
 
-        When ``ctx.step_id`` is set at :meth:`run` entry, bare stages (``step_ids``
-        slot ``None``) receive ``{ctx.step_id}.{index}`` ids.
+        When ``ctx.step_id`` is set at :meth:`run` entry, **every** child is
+        namespaced under it: an explicit ``step_ids`` slot ``"denoise"`` becomes
+        ``{ctx.step_id}.denoise``, and a bare (``None``) slot becomes
+        ``{ctx.step_id}.{index}``. Leave ``ctx.step_id`` as ``None`` to keep
+        explicit child ids unchanged (and bare slots auto-generated).
 
         Both bounds may be negative, counting back from the end of the pipeline as
         Python indexing does: ``start=-2`` runs the last two stages and ``end=-1``

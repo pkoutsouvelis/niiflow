@@ -15,29 +15,44 @@ def read_paths_from_file(
     path: Path | str,
     *,
     strict: bool = True,
+    skip_resolve_filepaths: bool = False,
 ) -> list[Path]:
-    """Read a ``.txt`` file listing file paths (one per line).
+    """Read a ``.txt`` file listing file paths (one path per line).
 
-    Blank lines are ignored. Each non-blank line is expanded and resolved to an
-    absolute path. Only paths that exist and are files are returned.
+    Blank lines are ignored. Each non-blank line is turned into a
+    :class:`~pathlib.Path`. By default, listed paths are expanded and resolved
+    to absolute paths. When ``skip_resolve_filepaths`` is ``True``, listed paths
+    are not expanded or resolved — they are parsed as written. The ``.txt``
+    list path itself is always resolved.
+
+    When ``strict`` is ``True``, each listed path must exist and be a file.
+    When ``False``, missing paths and directories are skipped.
 
     Args:
         path: Path to a ``.txt`` file containing one filesystem path per line.
         strict: When ``True`` (default), raise if a listed path does not exist
             or is not a file. When ``False``, skip such entries.
+        skip_resolve_filepaths: When ``False`` (default), expand and resolve
+            each extracted filepath. When ``True``, do not expand or resolve
+            listed paths (parsed as they are). Does not affect resolution of
+            ``path``.
 
     Returns:
-        Resolved :class:`~pathlib.Path` objects for every accepted file, in file
-        order.
+        :class:`~pathlib.Path` objects for every accepted file, in file order.
 
     Raises:
         FileNotFoundError: If ``path`` does not exist.
         ValueError: If ``path`` is not a ``.txt`` file, or (when ``strict``) a
             listed entry is missing or not a file.
-        TypeError: If ``strict`` is not a boolean.
+        TypeError: If ``strict`` or ``skip_resolve_filepaths`` is not a boolean.
     """
     if not isinstance(strict, bool):
         raise TypeError(f"`strict` must be a boolean, got {type(strict).__name__}")
+    if not isinstance(skip_resolve_filepaths, bool):
+        raise TypeError(
+            f"`skip_resolve_filepaths` must be a boolean, "
+            f"got {type(skip_resolve_filepaths).__name__}"
+        )
 
     list_path = resolve_path(path)
     if not list_path.is_file():
@@ -52,16 +67,16 @@ def read_paths_from_file(
         if not entry:
             continue
 
-        resolved = resolve_path(entry)
-        if resolved.is_file():
-            found.append(resolved)
+        candidate = Path(entry) if skip_resolve_filepaths else resolve_path(entry)
+        if candidate.is_file():
+            found.append(candidate)
             continue
 
         if strict:
-            kind = "directory" if resolved.exists() else "missing path"
+            kind = "directory" if candidate.exists() else "missing path"
             raise ValueError(
                 f"Line {line_no} of {list_path} is not an existing file "
-                f"({kind}): {resolved}"
+                f"({kind}): {candidate}"
             )
 
     return found

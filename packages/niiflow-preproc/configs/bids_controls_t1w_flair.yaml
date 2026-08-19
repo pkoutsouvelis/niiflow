@@ -27,7 +27,7 @@ settings:
       qc:
         name: CheckVoxelSpacing
         params:
-          image: "{active.path}"
+          image: "{active}"
           expected: [1.0, 1.0, 1.0]
           op: "<="
           id: "ctx.run_id"
@@ -44,7 +44,7 @@ settings:
       strip:
         name: ANTsBrainExtraction
         params:
-          image: "{active.path}"
+          image: "{active}"
           modality: t1
           enable: "ctx.outputs.qc.passed"
         save_outputs:
@@ -55,7 +55,7 @@ settings:
               mirror:
                 source: rawdata
                 target: derivatives/niiflow
-            name: "{active.stem|strip:_T1w}_desc-brain_T1w.nii.gz"
+            name: "{active.name|strip:_T1w.nii.gz}_desc-brain_T1w.nii.gz"
           brain_mask:
             root:
               mode: parent_match
@@ -63,7 +63,7 @@ settings:
               mirror:
                 source: rawdata
                 target: derivatives/niiflow
-            name: "{active.stem|strip:_T1w}_desc-brain_mask.nii.gz"
+            name: "{active.name|strip:_T1w.nii.gz}_desc-brain_mask.nii.gz"
     order: [qc, strip]
 
 inputs:

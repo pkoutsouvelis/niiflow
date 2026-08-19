@@ -1,3 +1,3 @@
 # niiflow (meta)
 
-Meta-package depending on `niiflow-core` and `niiflow-preproc`. See the [repository README](../../README.md).
+Meta-package depending on `niiflow-train` and `niiflow-preproc`. See the [repository README](../../README.md).

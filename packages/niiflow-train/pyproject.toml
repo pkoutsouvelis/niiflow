@@ -3,8 +3,8 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "niiflow-core"
-version = "0.2.0"
+name = "niiflow-train"
+version = "0.1.0"
 description = "Training and fine-tuning brain MRI foundation models (MONAI + PyTorch Lightning)."
 requires-python = ">=3.11"
 license = "MIT"

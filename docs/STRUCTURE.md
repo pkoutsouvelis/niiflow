@@ -2,11 +2,18 @@
 
 This file records structural / packaging changes so they stay easy to audit.
 
+## 2026-08-20 — Rename `niiflow-core` → `niiflow-train`; independent versions
+
+- **`packages/niiflow-core` → `packages/niiflow-train`**: Distribution renamed to `niiflow-train` (`0.1.0`); import path `niiflow.core` → `niiflow.train`.
+- **`packages/niiflow`**: Meta package set to `0.1.0`; depends on `niiflow-train` and `niiflow-preproc` (workspace sources updated).
+- **`packages/niiflow-preproc`**: Version bumped to `0.3.0` (independent of train/meta).
+- Docs, tests, `scripts/format.sh`, and workspace `testpaths` / members updated accordingly.
+
 ## 2026-05-11 — Level 3 monorepo + uv workspace
 
 - **Root `pyproject.toml`**: Replaced the single publishable `niiflow` project with a **virtual workspace** named `niiflow-workspace` (`version = 0.0.0`). It declares `[tool.uv.workspace]` members and **does not** define a buildable distribution. It lists `niiflow` (the meta member) under `[project.dependencies]` with `[tool.uv.sources] niiflow = { workspace = true }` so `uv sync` installs all three distributions into the dev environment without `--all-packages`.
 - **`[dependency-groups] dev`**: Dev tools (`pytest`, `ruff`, `mypy`, `jupyter`, `build`, `twine`, etc.) are attached to the workspace root for `uv sync --group dev`.
-- **`packages/niiflow-core`**: New distribution `niiflow-core` (`0.1.0`) with `src/niiflow/core/` (namespace subpackage only — no `niiflow/__init__.py`). Dependencies match the former root project: `lightning`, `monai`, `torch`, `wandb`, `nifti-finder`, `numpy`, `matplotlib`, `PyYAML`.
+- **`packages/niiflow-core`**: New distribution `niiflow-core` (`0.1.0`) with `src/niiflow/core/` (namespace subpackage only — no `niiflow/__init__.py`). Dependencies match the former root project: `lightning`, `monai`, `torch`, `wandb`, `nifti-finder`, `numpy`, `matplotlib`, `PyYAML`. *(Later renamed to `niiflow-train` / `niiflow.train`; see 2026-08-20.)*
 - **`packages/niiflow-preproc`**: New distribution `niiflow-preproc` (`0.1.0`) with `src/niiflow/preproc/`. Runtime deps kept light: `numpy`, `nibabel`, `PyYAML`. Optional extra `[ants]` is reserved for future ANTs-related pins (currently empty).
 - **`packages/niiflow`**: New **meta** distribution, still named `niiflow` on PyPI, depending on `niiflow-core` and `niiflow-preproc`. Uses `[tool.uv.sources]` with `workspace = true` so local development resolves members from the repo. Ships only `niiflow/__main__.py` (plus namespace packaging metadata) and the **`niiflow` console script** — **no** `niiflow/__init__.py`, so `niiflow.core` / `niiflow.preproc` from the other wheels remain visible (a regular `niiflow` package would shadow subpackages).
 - **Tests**: Moved to per-package `tests/` (`packages/*/tests/`). Root pytest config in `pyproject.toml` lists all three `testpaths`.
@@ -24,4 +31,4 @@ This file records structural / packaging changes so they stay easy to audit.
 
 ### Publishing note
 
-When releasing to PyPI, replace workspace-only dependency resolution for the meta package with **version pins** compatible with the released `niiflow-core` / `niiflow-preproc` versions (or use your release automation to rewrite `pyproject.toml` / metadata). The `[tool.uv.sources]` block is for local/workspace use.
+When releasing to PyPI, replace workspace-only dependency resolution for the meta package with **version pins** compatible with the released `niiflow-train` / `niiflow-preproc` versions (or use your release automation to rewrite `pyproject.toml` / metadata). The `[tool.uv.sources]` block is for local/workspace use.

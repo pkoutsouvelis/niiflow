@@ -96,7 +96,9 @@ def setup_worker_logging(
 def set_input_file_context(input_file: str) -> contextvars.Token[str]:
     """Set the per-task ``input_file`` and return a reset token.
 
-    Typical usage inside a per-file task function::
+    Typical usage inside an active-file-specific task function
+    (requires a logger configured with a
+    :class:`~niiflow.preproc.workflows.logging_utils.ContextVarFilter` filter)::
 
         token = set_input_file_context(str(path))
         try:

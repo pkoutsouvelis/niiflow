@@ -13,7 +13,11 @@ from typing import Any
 
 from .stager import Stager
 
-_STAGER_MODULES: tuple[str, ...] = ("niiflow.preproc.staging.file_stager",)
+_STAGER_MODULES: tuple[str, ...] = (
+    "niiflow.preproc.staging.file_stager",
+    "niiflow.preproc.staging.dynamic_referencing",
+    "niiflow.preproc.staging.utility",
+)
 
 
 def discover_stager_classes() -> dict[str, type[Stager]]:

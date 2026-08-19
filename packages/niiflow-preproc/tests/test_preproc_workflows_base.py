@@ -2,13 +2,15 @@
 
 These exercise the base classes through minimal dummy subclasses so the execution
 engine, constructor validation, and plan/run contract are covered without any
-staging, discovery, or pipeline machinery. ``DynamicPreprocessingWorkflow`` is
+staging, discovery, or pipeline machinery. ``DynamicProcessingWorkflow`` is
 tested separately in ``test_preproc_workflows_dynamic.py``.
 """
 
 from __future__ import annotations
 
+import logging
 import time
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -32,6 +34,11 @@ def _record_call(entry: StagedEntry) -> None:
         fh.write(f"{entry.active.as_posix()}\n")
 
 
+def _record_call_and_log(entry: StagedEntry) -> None:
+    logging.getLogger().info("from worker")
+    _record_call(entry)
+
+
 def _boom(entry: StagedEntry) -> None:
     raise RuntimeError(f"boom for {entry.active}")
 
@@ -50,6 +57,14 @@ class RecordingWorkflow(ProcessingWorkflow):
     @staticmethod
     def process_single(entry: StagedEntry) -> None:
         _record_call(entry)
+
+
+class WorkerLoggingWorkflow(RecordingWorkflow):
+    """Like :class:`RecordingWorkflow`, but also logs from the worker process."""
+
+    @staticmethod
+    def process_single(entry: StagedEntry) -> None:
+        _record_call_and_log(entry)
 
 
 class SleepingWorkflow(ProcessingWorkflow):
@@ -71,7 +86,7 @@ class PlanningWorkflow(PlannableWorkflow):
         return RunPlan(
             entries=tuple(
                 StagedEntry(
-                    active=Path(item).resolve(), params={"out_dir": self.out_dir}
+                    active=Path(item).resolve(), params={"out_dir": self.out_dir}  # type: ignore[attr-defined]
                 )
                 for item in source
             )
@@ -111,6 +126,15 @@ def workflow(logs_dir: Path) -> RecordingWorkflow:
 
 def _status_log(logs_dir: Path) -> str:
     return (logs_dir / "status.log").read_text(encoding="utf-8")
+
+
+def _status_outcomes(status: str, active: Path) -> list[str]:
+    prefix = f"{active} |"
+    outcomes: list[str] = []
+    for line in status.splitlines():
+        if line.startswith(prefix):
+            outcomes.append(line.split("|", 1)[1].strip().split()[0])
+    return outcomes
 
 
 class TestAbstractContract:
@@ -350,10 +374,34 @@ class TestParallelExecution:
         recorded = _recorded(out_dir)
         assert sorted(recorded) == sorted(a.resolve().as_posix() for a in actives)
 
+    @pytest.mark.parametrize("num_workers", [2, 4])
+    def test_spawns_num_workers_processes(
+        self,
+        tmp_path: Path,
+        num_workers: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        spawned: list[int] = []
+
+        class _SpyPool(ProcessPoolExecutor):
+            def shutdown(self, wait=True, **kwargs):
+                spawned.append(len(self._processes))
+                return super().shutdown(wait=wait, **kwargs)
+
+        monkeypatch.setattr(
+            "niiflow.preproc.workflows.workflow.ProcessPoolExecutor",
+            _SpyPool,
+        )
+
+        out_dir = tmp_path / "out"
+        wf = RecordingWorkflow(logs_root=tmp_path / "logs", num_workers=num_workers)
+        actives = [_touch(tmp_path / f"img-{index}.nii.gz") for index in range(7)]
+        wf.run_entries([_entry(active, out_dir) for active in actives])
+
+        assert spawned == [num_workers]
+
 
 class TestTimeoutExecution:
-    """A configured timeout is soft: overdue entries are reported, not cancelled."""
-
     def test_overdue_entry_is_reported_and_the_run_continues(
         self, tmp_path: Path, logs_dir: Path
     ) -> None:
@@ -375,9 +423,11 @@ class TestTimeoutExecution:
         )
 
         status = _status_log(logs_dir)
-        assert f"{fast.resolve()} | SUCCESS" in status
-        assert f"{slow.resolve()} | TIMEOUT" in status
-        assert fast.resolve().as_posix() in _recorded(out_dir)
+        assert _status_outcomes(status, fast.resolve()) == ["SUCCESS"]
+        assert _status_outcomes(status, slow.resolve()) == ["TIMEOUT", "SUCCESS"]
+        assert {fast.resolve().as_posix(), slow.resolve().as_posix()} <= set(
+            _recorded(out_dir)
+        )
 
     @pytest.mark.parametrize("num_workers", [1, 2])
     def test_queue_wait_does_not_count_towards_the_timeout(
@@ -402,8 +452,8 @@ class TestTimeoutExecution:
         )
 
         status = _status_log(logs_dir)
-        assert f"{first.resolve()} | TIMEOUT" in status
-        assert f"{second.resolve()} | SUCCESS" in status
+        assert _status_outcomes(status, first.resolve()) == ["TIMEOUT", "SUCCESS"]
+        assert _status_outcomes(status, second.resolve()) == ["SUCCESS"]
 
     def test_processing_within_the_limit_is_a_success(
         self, tmp_path: Path, logs_dir: Path
@@ -419,16 +469,17 @@ class TestTimeoutExecution:
         wf.run_entries([StagedEntry(active=active.resolve(), params=params)])
 
         status = _status_log(logs_dir)
-        assert f"{active.resolve()} | SUCCESS" in status
+        assert _status_outcomes(status, active.resolve()) == ["SUCCESS"]
         assert "TIMEOUT" not in status
 
-    def test_processing_past_the_limit_is_a_timeout(
+    def test_processing_past_the_limit_logs_timeout_then_success(
         self, tmp_path: Path, logs_dir: Path
     ) -> None:
         active = _touch(tmp_path / "entry.nii.gz")
+        out_dir = tmp_path / "out"
         wf = SleepingWorkflow(logs_root=logs_dir, num_workers=1, timeout=0.5)
         params = {
-            "out_dir": str(tmp_path / "out"),
+            "out_dir": str(out_dir),
             "slow_actives": (str(active),),
             "sleep_seconds": 0.8,
         }
@@ -436,15 +487,35 @@ class TestTimeoutExecution:
         wf.run_entries([StagedEntry(active=active.resolve(), params=params)])
 
         status = _status_log(logs_dir)
-        assert f"{active.resolve()} | TIMEOUT" in status
-        assert "SUCCESS" not in status
+        assert _status_outcomes(status, active.resolve()) == ["TIMEOUT", "SUCCESS"]
+        assert active.resolve().as_posix() in _recorded(out_dir)
+
+    def test_overdue_failure_is_reported_after_timeout(
+        self,
+        tmp_path: Path,
+        logs_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        active = _touch(tmp_path / "entry.nii.gz")
+        wf = RecordingWorkflow(logs_root=logs_dir, num_workers=1, timeout=0.5)
+
+        def _slow_fail(entry: StagedEntry) -> None:
+            time.sleep(0.8)
+            raise RuntimeError("late boom")
+
+        monkeypatch.setattr(wf, "process_single", _slow_fail)
+        wf.run_entries([_entry(active, tmp_path / "out")])
+
+        status = _status_log(logs_dir)
+        assert _status_outcomes(status, active.resolve()) == ["TIMEOUT", "FAILURE"]
+        assert "late boom" in status
 
 
 class TestRunPlan:
     def test_executes_plan_entries(self, tmp_path: Path) -> None:
         out_dir = tmp_path / "out"
         wf = PlanningWorkflow(logs_root=tmp_path / "logs")
-        wf.out_dir = str(out_dir)
+        wf.out_dir = str(out_dir)  # type: ignore[attr-defined]
         actives = [tmp_path / f"img-{index}.nii.gz" for index in range(2)]
         for active in actives:
             active.write_bytes(b"")
@@ -453,6 +524,30 @@ class TestRunPlan:
 
         assert set(_recorded(out_dir)) == {a.resolve().as_posix() for a in actives}
 
+    def test_run_plan_respects_start_end(self, tmp_path: Path) -> None:
+        out_dir = tmp_path / "out"
+        wf = PlanningWorkflow(logs_root=tmp_path / "logs")
+        wf.out_dir = str(out_dir)  # type: ignore[attr-defined]
+        actives = [tmp_path / f"img-{index}.nii.gz" for index in range(5)]
+        for active in actives:
+            active.write_bytes(b"")
+
+        wf.run_plan(wf.plan(actives), start=1, end=4)
+
+        assert _recorded(out_dir) == [a.resolve().as_posix() for a in actives[1:4]]
+
+    def test_run_plan_negative_end(self, tmp_path: Path) -> None:
+        out_dir = tmp_path / "out"
+        wf = PlanningWorkflow(logs_root=tmp_path / "logs")
+        wf.out_dir = str(out_dir)  # type: ignore[attr-defined]
+        actives = [tmp_path / f"img-{index}.nii.gz" for index in range(3)]
+        for active in actives:
+            active.write_bytes(b"")
+
+        wf.run_plan(wf.plan(actives), end=-1)
+
+        assert _recorded(out_dir) == [a.resolve().as_posix() for a in actives[:2]]
+
     def test_rejects_non_run_plan(self, tmp_path: Path) -> None:
         wf = PlanningWorkflow(logs_root=tmp_path / "logs")
         with pytest.raises(TypeError, match="`plan` must be a RunPlan"):
@@ -460,7 +555,7 @@ class TestRunPlan:
 
     def test_empty_plan_is_a_noop(self, tmp_path: Path) -> None:
         wf = PlanningWorkflow(logs_root=tmp_path / "logs")
-        wf.out_dir = str(tmp_path / "out")
+        wf.out_dir = str(tmp_path / "out")  # type: ignore[attr-defined]
         wf.run_plan(RunPlan(entries=()))
         assert _recorded(tmp_path / "out") == []
 
@@ -475,4 +570,29 @@ class TestLogging:
         wf = RecordingWorkflow(logs_root=logs_root)
         wf.log("hello")
         wf.status("a | SUCCESS")
+
         assert logs_root.exists()
+        assert (logs_root / "main.log").exists()
+        assert (logs_root / "status.log").exists()
+
+        main_log = (logs_root / "main.log").read_text(encoding="utf-8")
+        status_log = (logs_root / "status.log").read_text(encoding="utf-8")
+        assert "hello" in main_log
+        assert status_log.splitlines() == ["a | SUCCESS"]
+
+    def test_parallel_worker_logs_written_under_logs_root(self, tmp_path: Path) -> None:
+        logs_root = tmp_path / "logs"
+        out_dir = tmp_path / "out"
+        wf = WorkerLoggingWorkflow(logs_root=logs_root, num_workers=2)
+        actives = [_touch(tmp_path / f"img-{index}.nii.gz") for index in range(2)]
+
+        wf.run_entries([_entry(active, out_dir) for active in actives])
+
+        assert (logs_root / "workers.log").exists()
+        workers_log = (logs_root / "workers.log").read_text(encoding="utf-8")
+        assert workers_log.count("from worker") == len(actives)
+        for active in actives:
+            assert active.name in workers_log
+        status = _status_log(logs_root)
+        for active in actives:
+            assert _status_outcomes(status, active.resolve()) == ["SUCCESS"]

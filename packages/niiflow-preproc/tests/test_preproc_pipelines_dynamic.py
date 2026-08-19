@@ -11,7 +11,7 @@ import pytest
 from niiflow.preproc.pipelines import dynamic_pipeline
 from niiflow.preproc.pipelines.pipeline_stages import (
     PipelineStage,
-    discover_stage_classes,
+    discover_pipeline_stage_classes,
 )
 
 # Prefer importlib: package ``__init__`` re-exports ``dynamic_pipeline`` and
@@ -63,13 +63,13 @@ def registry_with_echo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> dict[str, type[PipelineStage]]:
     registry = {
-        **discover_stage_classes(),
+        **discover_pipeline_stage_classes(),
         "EchoStage": EchoStage,
         "RecordingStage": RecordingStage,
     }
     monkeypatch.setattr(
         _dynamic_pipeline_mod,
-        "discover_stage_classes",
+        "discover_pipeline_stage_classes",
         lambda: registry,
     )
     return registry
@@ -250,7 +250,9 @@ def test_rejects_instantiated_stage(
 def test_rejects_failed_instantiation(
     registry_with_echo: dict[str, type[PipelineStage]],
 ) -> None:
-    with pytest.raises(TypeError, match="Failed to instantiate stage") as excinfo:
+    with pytest.raises(
+        TypeError, match="Failed to instantiate pipeline stage"
+    ) as excinfo:
         dynamic_pipeline(
             {
                 "steps": [

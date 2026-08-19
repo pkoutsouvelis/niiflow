@@ -2,7 +2,7 @@
 
 __all__ = [
     "Compose",
-    "DynamicPreprocessingWorkflow",
+    "DynamicProcessingWorkflow",
     "FileStager",
     "PlannableWorkflow",
     "ProcessingWorkflow",
@@ -35,7 +35,7 @@ from niiflow.preproc.staging import (
     make_entries,
 )
 from niiflow.preproc.workflows import (
-    DynamicPreprocessingWorkflow,
+    DynamicProcessingWorkflow,
     PlannableWorkflow,
     ProcessingWorkflow,
     RunPlan,

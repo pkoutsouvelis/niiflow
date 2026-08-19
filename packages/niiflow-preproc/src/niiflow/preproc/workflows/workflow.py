@@ -63,7 +63,7 @@ class ProcessingWorkflow(ABC):
 
     This class provides the common execution engine: logging, serial or
     parallel worker execution, per-entry status reporting, and optional soft
-    per-entry timeouts.
+    per-entry time limits.
 
     Subclasses implement :meth:`process_single`, which defines how one
     :class:`~niiflow.preproc.staging.StagedEntry` is processed.
@@ -174,9 +174,9 @@ class ProcessingWorkflow(ABC):
             reported as ``STAGING_FAILURE`` in the status log and are not passed to
             :meth:`process_single`.
 
-            A configured timeout is a soft per-entry timeout. Timed-out entries are
-            reported in the status log, but running worker tasks may continue until
-            the underlying executor finishes or terminates.
+            A configured timeout is a soft per-entry time limit. Exceeding it
+            does not cancel the worker; ``status.log`` records ``TIMEOUT`` to
+            mark the overrun. Completion is still ``SUCCESS`` or ``FAILURE``.
         """
         entry_list = list(entries)
         if not entry_list:
@@ -210,7 +210,13 @@ class ProcessingWorkflow(ABC):
 
         with (
             self._logging_manager.setup_parallel_logging() as parallel,
-            self._progress_bar(len(runnable)) as progress,
+            tqdm(
+                total=len(runnable),
+                desc="Processing entries",
+                unit="entry",
+                disable=None,
+                leave=True,
+            ) as progress,
         ):
             if self._num_workers <= 1:
                 self._run_serial(runnable, progress)
@@ -237,27 +243,6 @@ class ProcessingWorkflow(ABC):
         """
         return self.run(*args, **kwargs)
 
-    def _progress_bar(self, total: int) -> Any:
-        """Return a context manager yielding a progress bar (or ``None``).
-
-        The bar auto-disables when stderr is not an interactive terminal
-        (``disable=None``), so batch/CI runs and captured test output stay clean while
-        interactive runs get a live bar that coexists with the loggers.
-        """
-        return tqdm(
-            total=total,
-            desc="Processing entries",
-            unit="entry",
-            disable=None,
-            leave=True,
-        )
-
-    @staticmethod
-    def _advance(progress: Any) -> None:
-        """Advance ``progress`` by one entry when a progress bar is active."""
-        if progress is not None:
-            progress.update(1)
-
     @staticmethod
     def _partition_entries(
         entries: list[StagedEntry],
@@ -278,7 +263,11 @@ class ProcessingWorkflow(ABC):
         *,
         detail: str = "",
     ) -> None:
-        """Write one ``status.log`` line for ``entry``."""
+        """Append a ``status.log`` line for ``entry``.
+
+        ``TIMEOUT`` marks an overrun and may be followed by ``SUCCESS`` or ``FAILURE``
+        when the worker finishes.
+        """
         if outcome == "SUCCESS":
             self.status(f"{entry.active} | SUCCESS")
         elif outcome == "TIMEOUT":
@@ -288,19 +277,33 @@ class ProcessingWorkflow(ABC):
         else:
             self.status(f"{entry.active} | STAGING_FAILURE | {detail}")
 
-    def _status_future(self, fut: Future[float], entry: StagedEntry) -> None:
-        """Report the processing outcome for a completed worker future."""
+    def _status_future(
+        self,
+        fut: Future[float],
+        entry: StagedEntry,
+        *,
+        timeout: float | None = None,
+    ) -> bool:
+        """Wait on ``fut`` and append a ``status.log`` line.
+
+        Returns ``True`` when processing finished (``SUCCESS`` or ``FAILURE``). Returns
+        ``False`` when ``timeout`` expired first (``TIMEOUT`` marks the overrun; the
+        worker may still be running).
+        """
         try:
-            elapsed = fut.result()
-            if self._timeout is not None and elapsed > self._timeout:
-                self._status_entry(entry, "TIMEOUT")
-            else:
-                self._status_entry(entry, "SUCCESS")
+            fut.result(timeout=timeout)
+        except TimeoutError:
+            self._status_entry(entry, "TIMEOUT")
+            return False
         except Exception:
             tb = traceback.format_exc().strip().replace("\n", "\n  ")
             self._status_entry(entry, "FAILURE", detail=tb)
+            return True
+        else:
+            self._status_entry(entry, "SUCCESS")
+            return True
 
-    def _run_serial(self, entries: list[StagedEntry], progress: Any = None) -> None:
+    def _run_serial(self, entries: list[StagedEntry], progress: Any) -> None:
         if self._timeout is None:
             for entry in entries:
                 try:
@@ -310,33 +313,21 @@ class ProcessingWorkflow(ABC):
                     tb = traceback.format_exc().strip().replace("\n", "\n  ")
                     self._status_entry(entry, "FAILURE", detail=tb)
                 finally:
-                    self._advance(progress)
+                    progress.update(1)
             return
 
         with ThreadPoolExecutor(max_workers=1) as executor:
             for entry in entries:
                 fut = executor.submit(_execute_one, self.process_single, entry)
-                try:
-                    elapsed = fut.result(timeout=self._timeout)
-                    if elapsed > self._timeout:
-                        self._status_entry(entry, "TIMEOUT")
-                    else:
-                        self._status_entry(entry, "SUCCESS")
-                except TimeoutError:
-                    self._status_entry(entry, "TIMEOUT")
-                    # Release the single worker thread before submitting the next entry.
-                    fut.result()
-                except Exception:
-                    tb = traceback.format_exc().strip().replace("\n", "\n  ")
-                    self._status_entry(entry, "FAILURE", detail=tb)
-                finally:
-                    self._advance(progress)
+                if not self._status_future(fut, entry, timeout=self._timeout):
+                    self._status_future(fut, entry)
+                progress.update(1)
 
     def _run_parallel(
         self,
         entries: list[StagedEntry],
         parallel: ParallelLogging,
-        progress: Any = None,
+        progress: Any,
     ) -> None:
         manager = multiprocessing.Manager() if self._timeout is not None else None
         try:
@@ -354,17 +345,18 @@ class ProcessingWorkflow(ABC):
                 if self._timeout is None:
                     for fut in as_completed(futures):
                         self._status_future(fut, futures[fut])
-                        self._advance(progress)
+                        progress.update(1)
                     return
 
-                handled: set[Future[float]] = set()
+                completed: set[Future[float]] = set()
+                timed_out: set[Future[float]] = set()
                 poll_interval = min(0.5, self._timeout / 10)
 
-                while len(handled) < len(futures):
+                while len(completed) < len(futures):
                     remaining = {
                         fut: entry
                         for fut, entry in futures.items()
-                        if fut not in handled
+                        if fut not in completed
                     }
                     done, not_done = wait(
                         remaining.keys(),
@@ -372,22 +364,20 @@ class ProcessingWorkflow(ABC):
                         return_when=FIRST_COMPLETED,
                     )
                     for fut in done:
-                        if fut in handled:
+                        if fut in completed:
                             continue
                         self._status_future(fut, remaining[fut])
-                        handled.add(fut)
-                        self._advance(progress)
+                        completed.add(fut)
+                        progress.update(1)
 
                     now = time.monotonic()
                     for fut in not_done:
-                        entry = remaining[fut]
-                        if start_times is None:
+                        if fut in timed_out or start_times is None:
                             continue
-                        started = start_times.get(str(entry.active))
+                        started = start_times.get(str(remaining[fut].active))
                         if started is not None and now - started > self._timeout:
-                            self._status_entry(entry, "TIMEOUT")
-                            handled.add(fut)
-                            self._advance(progress)
+                            self._status_entry(remaining[fut], "TIMEOUT")
+                            timed_out.add(fut)
         finally:
             if manager is not None:
                 manager.shutdown()
@@ -409,20 +399,39 @@ class PlannableWorkflow(ProcessingWorkflow):
         """Build a run plan from workflow-specific inputs."""
         ...
 
-    def run_plan(self, plan: RunPlan) -> None:
+    def run_plan(
+        self,
+        plan: RunPlan,
+        *,
+        start: int = 0,
+        end: int | None = None,
+    ) -> None:
         """Execute a prepared run plan.
 
         Args:
             plan: Run plan whose entries should be executed.
+            start: Inclusive plan entry index to begin at (supports negatives).
+            end: Exclusive plan entry index to stop at. ``None`` runs through the
+                last entry. Indices include staging-failed entries and use the same
+                bound rules as :meth:`~niiflow.preproc.workflows.plan.RunPlan.slice`.
 
         Raises:
             TypeError: If ``plan`` is not a
                 :class:`~niiflow.preproc.workflows.plan.RunPlan`.
+            ValueError: If ``start`` / ``end`` are out of range for ``plan``.
 
         Notes:
             This method does not rebuild, modify, or restage the plan. It executes
-            the entries exactly as stored in ``plan``.
+            the selected window of entries as stored in ``plan``.
         """
         if not isinstance(plan, RunPlan):
             raise TypeError(f"`plan` must be a RunPlan, got {type(plan).__name__}")
-        self.run_entries(plan.entries)
+        selected = plan.slice(start=start, end=end)
+        total = len(plan.entries)
+        if len(selected.entries) != total:
+            self.log(
+                f"Selecting {len(selected.entries)} of {total} plan "
+                f"entr{'y' if total == 1 else 'ies'} "
+                f"(start={start!r}, end={end!r})"
+            )
+        self.run_entries(selected.entries)

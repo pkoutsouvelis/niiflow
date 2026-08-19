@@ -1,4 +1,4 @@
-"""Typed shapes for workflow run inputs (active-file discovery).
+"""Typed shapes for workflow run inputs (active-file collection).
 
 ``InputData`` is what plannable workflows accept as ``run_inputs``: either one input
 specification or a sequence of them. Each specification is a discriminated union on
@@ -16,7 +16,7 @@ __all__ = [
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal, TypeAlias, TypedDict
+from typing import Literal, NotRequired, TypeAlias, TypedDict
 
 from niiflow.preproc.data.types import NiftiFinderConfig
 
@@ -34,10 +34,17 @@ class SearchInput(TypedDict):
 
 
 class FromFileInput(TypedDict):
-    """Load active file paths from a text file (one path per line)."""
+    """Load active file paths from a text file (one path per line).
+
+    Optional ``strict`` and ``skip_resolve_filepaths`` are forwarded to
+    :func:`~niiflow.preproc.data.read_paths_from_file` (defaults ``True`` and ``False``
+    respectively).
+    """
 
     mode: Literal["from_file"]
     path: Path | str
+    strict: NotRequired[bool]
+    skip_resolve_filepaths: NotRequired[bool]
 
 
 RunInputSpec: TypeAlias = Path | str | SearchInput | FromFileInput

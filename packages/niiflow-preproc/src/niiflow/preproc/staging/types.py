@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal, NotRequired, Required, TypeAlias, TypedDict
 
 PointerKind: TypeAlias = Literal["input", "output"]
-RootMode: TypeAlias = Literal["active", "path", "parent_up", "parent_match"]
+RootMode: TypeAlias = Literal["path", "parent_up", "parent_match"]
 RootSelection: TypeAlias = Literal["most_local", "most_global", "raise"]
 ResolveResults: TypeAlias = Literal["first", "all", "single"]
 
@@ -19,15 +19,20 @@ class MirrorSpec(TypedDict):
 
 
 class RootSearchSpec(TypedDict, total=False):
-    """Root resolution specification."""
+    """Root resolution specification.
 
-    mode: Required[RootMode]
+    Omit ``mode`` to start from the active file's parent (then apply ``mirror`` if
+    present). ``mode`` is required for ``path``, ``parent_up``, and ``parent_match``.
+    """
+
+    mode: NotRequired[RootMode]
     value: NotRequired[str | Path | int | None]
     mirror: NotRequired[MirrorSpec | None]
     selection: NotRequired[RootSelection]
 
 
-RootSpec: TypeAlias = RootSearchSpec | list[RootSearchSpec] | str | Path | None
+SingleRootSpec: TypeAlias = RootSearchSpec | str | Path | None
+RootSpec: TypeAlias = SingleRootSpec | list[SingleRootSpec]
 
 
 class InputSearchSpec(TypedDict, total=False):

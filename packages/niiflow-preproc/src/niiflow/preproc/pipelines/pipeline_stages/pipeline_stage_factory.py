@@ -1,10 +1,10 @@
-"""Stage discovery and instantiation for config-driven pipelines."""
+"""Pipeline-stage discovery and instantiation for config-driven pipelines."""
 
 from __future__ import annotations
 
 __all__ = [
-    "create_stage",
-    "discover_stage_classes",
+    "create_pipeline_stage",
+    "discover_pipeline_stage_classes",
 ]
 
 import importlib
@@ -13,7 +13,8 @@ from typing import Any
 
 from .pipeline_stage import PipelineStage
 
-_STAGE_MODULES: tuple[str, ...] = (
+_PIPELINE_STAGE_MODULES: tuple[str, ...] = (
+    "niiflow.preproc.pipelines.pipeline_stages.arithmetic",
     "niiflow.preproc.pipelines.pipeline_stages.bias_field",
     "niiflow.preproc.pipelines.pipeline_stages.croppad",
     "niiflow.preproc.pipelines.pipeline_stages.denoising",
@@ -28,15 +29,15 @@ _STAGE_MODULES: tuple[str, ...] = (
 )
 
 
-def discover_stage_classes() -> dict[str, type[PipelineStage]]:
+def discover_pipeline_stage_classes() -> dict[str, type[PipelineStage]]:
     """Return concrete :class:`PipelineStage` types keyed by class name.
 
-    Scans the modules listed in :data:`_STAGE_MODULES` and excludes the abstract base
-    :class:`PipelineStage`. Orchestrators such as :class:`Compose` are omitted by not
-    listing their modules here.
+    Scans the modules listed in :data:`_PIPELINE_STAGE_MODULES` and excludes the
+    abstract base :class:`PipelineStage`. Orchestrators such as :class:`Compose` are
+    omitted by not listing their modules here.
     """
     registry: dict[str, type[PipelineStage]] = {}
-    for module_name in _STAGE_MODULES:
+    for module_name in _PIPELINE_STAGE_MODULES:
         module = importlib.import_module(module_name)
         for name, obj in inspect.getmembers(module, inspect.isclass):
             if obj is PipelineStage:
@@ -49,7 +50,7 @@ def discover_stage_classes() -> dict[str, type[PipelineStage]]:
     return registry
 
 
-def _resolve_stage_class(
+def _resolve_pipeline_stage_class(
     name: str, registry: dict[str, type[PipelineStage]]
 ) -> type[PipelineStage]:
     if not isinstance(name, str) or not name:
@@ -67,45 +68,51 @@ def _resolve_stage_class(
         ) from exc
 
 
-def create_stage(
-    stage_name: str,
-    stage_kwargs: dict[str, Any] | None = None,
+def create_pipeline_stage(
+    pipeline_stage_name: str,
+    pipeline_stage_kwargs: dict[str, Any] | None = None,
     *,
     registry: dict[str, type[PipelineStage]] | None = None,
 ) -> PipelineStage:
     """Instantiate a :class:`PipelineStage` from a registered class name and constructor
     kwargs.
 
-    ``stage_name`` must match a concrete stage listed by
-    :func:`discover_stage_classes`, for example ``"ANTsDenoise"``. ``stage_kwargs`` is
-    forwarded to that class's constructor. :class:`Compose` is not constructible this
-    way; build it directly instead.
+    ``pipeline_stage_name`` must match a concrete stage listed by
+    :func:`discover_pipeline_stage_classes`, for example ``"ANTsDenoise"``.
+    ``pipeline_stage_kwargs`` is forwarded to that class's constructor.
+    :class:`Compose` is not constructible this way; build it directly instead.
 
     Args:
-        stage_name: Registered stage class name.
-        stage_kwargs: Constructor keyword arguments, typically ``params``,
+        pipeline_stage_name: Registered pipeline-stage class name.
+        pipeline_stage_kwargs: Constructor keyword arguments, typically ``params``,
             ``save_outputs``, and ``verbose``. ``None`` is treated as ``{}``.
         registry: Optional pre-built name-to-class mapping. Defaults to
-            :func:`discover_stage_classes`.
+            :func:`discover_pipeline_stage_classes`.
 
     Returns:
-        The instantiated stage.
+        The instantiated pipeline stage.
 
     Raises:
-        TypeError: If ``stage_kwargs`` is neither a dictionary nor ``None``, or if the
-            stage constructor rejects the supplied kwargs.
-        ValueError: If ``stage_name`` is not a registered concrete stage.
+        TypeError: If ``pipeline_stage_kwargs`` is neither a dictionary nor ``None``,
+            or if the pipeline-stage constructor rejects the supplied kwargs.
+        ValueError: If ``pipeline_stage_name`` is not a registered concrete stage.
     """
-    if stage_kwargs is not None and not isinstance(stage_kwargs, dict):
+    if pipeline_stage_kwargs is not None and not isinstance(
+        pipeline_stage_kwargs, dict
+    ):
         raise TypeError(
-            f"`stage_kwargs` must be a dictionary or None, got "
-            f"{type(stage_kwargs).__name__}."
+            f"`pipeline_stage_kwargs` must be a dictionary or None, got "
+            f"{type(pipeline_stage_kwargs).__name__}."
         )
 
-    stage_cls = _resolve_stage_class(stage_name, registry or discover_stage_classes())
-    kwargs = {} if stage_kwargs is None else dict(stage_kwargs)
+    pipeline_stage_cls = _resolve_pipeline_stage_class(
+        pipeline_stage_name, registry or discover_pipeline_stage_classes()
+    )
+    kwargs = {} if pipeline_stage_kwargs is None else dict(pipeline_stage_kwargs)
 
     try:
-        return stage_cls(**kwargs)
+        return pipeline_stage_cls(**kwargs)
     except TypeError as exc:
-        raise TypeError(f"Failed to instantiate stage {stage_name!r}: {exc}") from exc
+        raise TypeError(
+            f"Failed to instantiate pipeline stage {pipeline_stage_name!r}: {exc}"
+        ) from exc

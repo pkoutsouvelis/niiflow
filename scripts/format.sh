@@ -9,7 +9,7 @@ cd "$ROOT"
 
 # Member source trees only (avoids nested package .venv/, tests/, and site-packages).
 SOURCE_DIRS=(
-  packages/niiflow-core/src
+  packages/niiflow-train/src
   packages/niiflow-preproc/src
   packages/niiflow/src
 )
