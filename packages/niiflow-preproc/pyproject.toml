@@ -10,6 +10,24 @@ requires-python = ">=3.11"
 license = "MIT"
 readme = "README.md"
 authors = [{ name = "Petros Koutsouvelis" }]
+keywords = [
+    "nifti",
+    "bids",
+    "neuroimaging",
+    "preprocessing",
+    "MRI",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Utilities",
+]
 dependencies = [
     "numpy>=2.3.5,<3.0.0",
     "nibabel>=5.0.0,<6.0.0",
@@ -21,6 +39,12 @@ dependencies = [
     "tqdm>=4.66.0,<5.0.0",
     "scipy>=1.14,<2.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/pkoutsouvelis/niiflow"
+Repository = "https://github.com/pkoutsouvelis/niiflow"
+Issues = "https://github.com/pkoutsouvelis/niiflow/issues"
+Documentation = "https://github.com/pkoutsouvelis/niiflow/tree/main/packages/niiflow-preproc"
 
 [project.scripts]
 niiflow-preproc = "niiflow.preproc.cli.main:main"

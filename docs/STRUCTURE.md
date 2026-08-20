@@ -2,6 +2,13 @@
 
 This file records structural / packaging changes so they stay easy to audit.
 
+## 2026-08-20 — Per-package PyPI publish workflows + metadata
+
+- **`.github/workflows/publish-niiflow-{preproc,train}-testpypi.yml`**: `workflow_dispatch` builds the package under `packages/…` and uploads to TestPyPI (`secrets.TEST_PYPI_API_TOKEN`).
+- **`.github/workflows/publish-niiflow-{preproc,train}.yml`**: on GitHub Release `published`, build → artifact → PyPI (`secrets.PYPI_API_TOKEN`, `skip-existing: true`).
+- Workflows live under `.github/workflows/` (GitHub does not load workflows from `packages/`).
+- **`packages/niiflow-preproc` / `packages/niiflow-train` `pyproject.toml`**: added `[project.urls]`, classifiers (MIT; Python 3.11+), and keywords. URLs point at the monorepo `pkoutsouvelis/niiflow`.
+
 ## 2026-08-20 — Default pytest coverage
 
 - Root `addopts` now enable `pytest-cov` on every `uv run pytest` (`source_pkgs = ["niiflow"]`, `term-missing` report). Pass `--no-cov` to skip.

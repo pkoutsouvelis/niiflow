@@ -10,6 +10,28 @@ requires-python = ">=3.11"
 license = "MIT"
 readme = "README.md"
 authors = [{ name = "Petros Koutsouvelis" }]
+keywords = [
+    "nifti",
+    "neuroimaging",
+    "MRI",
+    "deep-learning",
+    "pytorch",
+    "monai",
+    "lightning",
+    "training",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Utilities",
+]
 dependencies = [
     "nifti-finder>=2.0.0,<3.0.0",
     "lightning>=2.5.5,<3.0.0",
@@ -20,6 +42,12 @@ dependencies = [
     "matplotlib>=3.10.7,<4.0.0",
     "PyYAML>=6.0.2,<7.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/pkoutsouvelis/niiflow"
+Repository = "https://github.com/pkoutsouvelis/niiflow"
+Issues = "https://github.com/pkoutsouvelis/niiflow/issues"
+Documentation = "https://github.com/pkoutsouvelis/niiflow/tree/main/packages/niiflow-train"
 
 [project.optional-dependencies]
 test = ["pytest>=7.0"]
