@@ -49,7 +49,24 @@ markers = [
     "viz: marks tests as visualization-only (deselect with '-m \"not viz\"')",
     "serial",
 ]
-addopts = "-m 'not viz'"
+addopts = [
+    "-m",
+    "not viz",
+    "--cov",
+    "--cov-report=term-missing",
+]
+
+[tool.coverage.run]
+source_pkgs = ["niiflow"]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+]
 
 [tool.black]
 line-length = 88

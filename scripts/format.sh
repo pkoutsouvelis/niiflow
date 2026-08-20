@@ -28,22 +28,29 @@ run() {
   fi
 }
 
-echo "Running Black (before Ruff)..."
-run black "${SOURCE_DIRS[@]}"
-
 echo "Running Ruff..."
 run ruff check --fix "${SOURCE_DIRS[@]}"
+
+echo "Running Black..."
+run black "${SOURCE_DIRS[@]}"
 
 echo "Running Docformatter..."
 # Docstrings only; `--black` matches Black’s wrapping. Do not recurse over `packages/`
 # (would hit stale per-package `.venv/` trees and third-party site-packages).
-run docformatter -r --in-place --black "${SOURCE_DIRS[@]}"
+# Exit 3 means files were rewritten — that is success for an in-place run. Under
+# `set -e` we must not abort before the final Black pass, which reconciles any
+# non-docstring multiline strings docformatter may have touched.
+df_status=0
+run docformatter -r --in-place --black "${SOURCE_DIRS[@]}" || df_status=$?
+if [[ "$df_status" -ne 0 && "$df_status" -ne 3 ]]; then
+  exit "$df_status"
+fi
 
 echo "Running Black..."
 run black "${SOURCE_DIRS[@]}"
 
 echo "Checking doc coverage..."
-# Config in root `pyproject.toml` under `[tool.interrogate]`.
-run interrogate "${SOURCE_DIRS[@]}"
+# Explicit config: `uv run interrogate PATHS` does not always discover root pyproject.toml.
+run interrogate -c pyproject.toml "${SOURCE_DIRS[@]}"
 
 echo "Done."

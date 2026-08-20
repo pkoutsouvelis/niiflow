@@ -284,15 +284,12 @@ class RunPlan:
             conn.execute("""CREATE TABLE meta ( key VARCHAR PRIMARY KEY,
 
                          value VARCHAR NOT NULL )
-                         """
-                            )
-            conn.execute(\
-                         """CREATE TABLE entries ( entry_index INTEGER PRIMARY KEY,
+                         """)
+            conn.execute("""CREATE TABLE entries ( entry_index INTEGER PRIMARY KEY,
                          active VARCHAR NOT NULL, params VARCHAR NOT NULL,
 
                          errors VARCHAR NOT NULL )
-                         """
-                            )
+                         """)
             conn.execute(
                 "INSERT INTO meta VALUES (?, ?)",
                 ["plan_version", str(PLAN_VERSION)],
@@ -315,8 +312,7 @@ class RunPlan:
                     )
                 conn.executemany(
                     """INSERT INTO entries (entry_index, active, params, errors) VALUES
-                    (?, ?, ?, ?)"""
-                                   ,
+                    (?, ?, ?, ?)""",
                     rows,
                 )
         finally:
@@ -346,8 +342,7 @@ class RunPlan:
                 entry_index >= ?
 
                 AND entry_index < ? ORDER BY entry_index
-                """
-                   ,
+                """,
                 [start_index, end_index],
             ).fetchall()
         finally:

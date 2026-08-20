@@ -2,6 +2,14 @@
 
 This file records structural / packaging changes so they stay easy to audit.
 
+## 2026-08-20 — Default pytest coverage
+
+- Root `addopts` now enable `pytest-cov` on every `uv run pytest` (`source_pkgs = ["niiflow"]`, `term-missing` report). Pass `--no-cov` to skip.
+
+## 2026-08-20 — GitHub Actions CI
+
+- **`.github/workflows/ci.yml`**: On push/PR, `uv sync --group dev`, then `black --check` + `ruff check` on member `src/` trees, then `pytest -m "not integration and not slow and not viz"`. Omits docformatter and interrogate.
+
 ## 2026-08-20 — Rename `niiflow-core` → `niiflow-train`; independent versions
 
 - **`packages/niiflow-core` → `packages/niiflow-train`**: Distribution renamed to `niiflow-train` (`0.1.0`); import path `niiflow.core` → `niiflow.train`.
@@ -27,7 +35,7 @@ This file records structural / packaging changes so they stay easy to audit.
 
 ### Formatting / lint script
 
-- **`scripts/format.sh`**: Runs **Ruff** (`check --fix`), **docformatter** (`packages/` only), **Black** (repo `.`), and **interrogate** (package `src/` trees). Dev deps: `black`, `docformatter`, `interrogate` (plus existing `ruff`) in the workspace **`[dependency-groups] dev`**. **`[tool.interrogate]`** lives in the root `pyproject.toml`.
+- **`scripts/format.sh`**: Runs **Ruff** (`check --fix`), **Black**, **docformatter** (`--black`), **Black** again, then **interrogate** on member `src/` trees. Docformatter exit code `3` (files rewritten) is treated as success so `set -e` does not skip the final Black pass (needed when docformatter touches multiline non-docstring strings such as SQL). Interrogate is invoked with `-c pyproject.toml`. Dev deps: `black`, `docformatter`, `interrogate`, `ruff` in workspace **`[dependency-groups] dev`**. **`[tool.interrogate]`** lives in the root `pyproject.toml`.
 
 ### Publishing note
 

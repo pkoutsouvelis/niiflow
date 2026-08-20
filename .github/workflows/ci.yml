@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install workspace
+        run: uv sync --group dev
+
+      - name: Black
+        run: uv run black --check packages/niiflow-train/src packages/niiflow-preproc/src packages/niiflow/src
+
+      - name: Ruff
+        run: uv run ruff check packages/niiflow-train/src packages/niiflow-preproc/src packages/niiflow/src
+
+      - name: Pytest
+        run: uv run pytest -m "not integration and not slow and not viz"

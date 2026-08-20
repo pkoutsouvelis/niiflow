@@ -31,10 +31,14 @@ uv sync --group dev
 The workspace root depends on the `niiflow` meta package (workspace member), so a normal sync installs **niiflow-train**, **niiflow-preproc**, and **torch/monai/lightning** into `.venv` without needing `--all-packages`.
 
 ```bash
-uv run pytest
+uv run pytest          # includes line coverage for the niiflow namespace
 uv run niiflow
-./scripts/format.sh   # ruff (fix) → docformatter → black → interrogate
+./scripts/format.sh   # ruff (fix) → black → docformatter → black → interrogate
 ```
+
+CI (`.github/workflows/ci.yml`) runs on every push/PR: `black --check`, `ruff check`, and unit tests (`not integration and not slow and not viz`).
+
+Coverage is on by default (`--cov` / `--cov-report=term-missing` in root `pyproject.toml`). Pass `--no-cov` to skip it.
 
 `scripts/format.sh` prepends `.venv/bin` to `PATH` and uses `uv run -- …` when `uv` is available so tool flags (e.g. docformatter `-e`) are not swallowed by uv.
 
