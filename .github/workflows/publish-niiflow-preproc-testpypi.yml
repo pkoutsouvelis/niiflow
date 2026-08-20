@@ -16,10 +16,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -30,6 +30,17 @@ jobs:
 
       - name: Build package
         run: python -m build
+
+      - name: Require TestPyPI token
+        env:
+          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        run: |
+          if [ -z "${TWINE_PASSWORD}" ]; then
+            echo "::error::Secret TEST_PYPI_API_TOKEN is empty or missing."
+            echo "Create an API token at https://test.pypi.org/manage/account/token/"
+            echo "then add it as a repository Actions secret named TEST_PYPI_API_TOKEN."
+            exit 1
+          fi
 
       - name: Publish to TestPyPI
         env:

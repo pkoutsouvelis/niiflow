@@ -38,7 +38,7 @@ uv run niiflow
 
 CI (`.github/workflows/ci.yml`) runs on every push/PR: `black --check`, `ruff check`, and unit tests (`not integration and not slow and not viz`).
 
-Publishing (manual TestPyPI / on GitHub Release → PyPI) is per distribution: see `.github/workflows/publish-niiflow-*.yml`. Requires repo secrets `TEST_PYPI_API_TOKEN` and `PYPI_API_TOKEN`.
+Publishing is manual per distribution (`workflow_dispatch`): see `.github/workflows/publish-niiflow-*.yml` (TestPyPI and PyPI). Requires repo secrets `TEST_PYPI_API_TOKEN` and `PYPI_API_TOKEN`.
 
 Coverage is on by default (`--cov` / `--cov-report=term-missing` in root `pyproject.toml`). Pass `--no-cov` to skip it.
 

@@ -4,8 +4,8 @@ This file records structural / packaging changes so they stay easy to audit.
 
 ## 2026-08-20 — Per-package PyPI publish workflows + metadata
 
-- **`.github/workflows/publish-niiflow-{preproc,train}-testpypi.yml`**: `workflow_dispatch` builds the package under `packages/…` and uploads to TestPyPI (`secrets.TEST_PYPI_API_TOKEN`).
-- **`.github/workflows/publish-niiflow-{preproc,train}.yml`**: on GitHub Release `published`, build → artifact → PyPI (`secrets.PYPI_API_TOKEN`, `skip-existing: true`).
+- **`.github/workflows/publish-niiflow-{preproc,train}-testpypi.yml`**: `workflow_dispatch` → TestPyPI (`secrets.TEST_PYPI_API_TOKEN`).
+- **`.github/workflows/publish-niiflow-{preproc,train}.yml`**: `workflow_dispatch` → PyPI (`secrets.PYPI_API_TOKEN`, `skip-existing: true`). Independent for now; can later sync via a shared release trigger when both packages are mature.
 - Workflows live under `.github/workflows/` (GitHub does not load workflows from `packages/`).
 - **`packages/niiflow-preproc` / `packages/niiflow-train` `pyproject.toml`**: added `[project.urls]`, classifiers (MIT; Python 3.11+), and keywords. URLs point at the monorepo `pkoutsouvelis/niiflow`.
 

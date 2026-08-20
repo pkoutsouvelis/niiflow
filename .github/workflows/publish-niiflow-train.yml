@@ -2,46 +2,39 @@
 name: Publish niiflow-train
 
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  build:
+  build-and-publish:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: packages/niiflow-train
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - run: python -m pip install --upgrade pip build
+      - name: Upgrade pip and install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
 
-      - run: python -m build
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: niiflow-train-dist
-          path: packages/niiflow-train/dist/*
-
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: niiflow-train-dist
-          path: dist
+      - name: Build package
+        run: python -m build
 
       - name: Upload to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
+          packages-dir: packages/niiflow-train/dist/
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
