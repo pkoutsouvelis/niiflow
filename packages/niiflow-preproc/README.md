@@ -1,5 +1,9 @@
 # niiflow-preproc
 
+[![PyPI](https://img.shields.io/pypi/v/niiflow-preproc.svg)](https://pypi.org/project/niiflow-preproc/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/pkoutsouvelis/niiflow/blob/main/LICENSE)
+
 Configurable neuroimaging workflows for offline image preprocessing tasks (and more). 
 `niiflow-preproc` turns a single YAML/JSON config into a reproducible, parallel processing 
 run over many images, while keeping the heavy/optional scientific dependencies (ANTs, ANTsPyNet,

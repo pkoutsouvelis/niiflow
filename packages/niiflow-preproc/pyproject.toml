@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "niiflow-preproc"
 version = "0.3.0"
-description = "Offline preprocessing workflows for niiflow (heavy / optional deps isolated from training)."
+description = "Configurable neuroimaging workflows for preprocessing tasks."
 requires-python = ">=3.11"
 license = "MIT"
 readme = "README.md"
