@@ -129,7 +129,7 @@ dynamic_pipeline(
 `ANTsResampleToTarget`, `Reorient`, `ClampIntensities`, `MinmaxNorm`, `ZTransformNorm`,
 `PointwiseArithmetic`, `CenterCrop`, `CenterPad`, `CropToMask`, `CropToRange`,
 `PadToRange`, `CheckDimensions`, `CheckVoxelSpacing`, `ApplyMask`, `SmoothMask`,
-`RelabelMask`, `ToNumpy`, `GetImage`, `Rename`, `Delete`.
+`RelabelMask`, `ToNumpy`, `GetImage`, `Rename`, `Delete`, `SyncMetadata`.
 
 ---
 
@@ -528,7 +528,7 @@ niiflow-preproc/
     │       ├── croppad.py            # CenterCrop / CenterPad / Crop/Pad-to-range
     │       ├── qc.py                 # CheckDimensions / CheckVoxelSpacing
     │       ├── masks.py              # ApplyMask / SmoothMask / RelabelMask
-    │       ├── utility.py            # Reorient / ToNumpy / GetImage / Rename / Delete
+    │       ├── utility.py            # Reorient / ToNumpy / GetImage / Rename / Delete / SyncMetadata
     │       └── pipelines.py          # ANTsPreprocessBrainImage
     ├── workflows/
     │   ├── workflow.py               # ProcessingWorkflow / PlannableWorkflow (execution engine)

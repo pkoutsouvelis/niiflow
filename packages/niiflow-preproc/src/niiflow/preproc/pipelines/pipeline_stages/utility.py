@@ -7,6 +7,7 @@ __all__ = [
     "GetImage",
     "Rename",
     "Reorient",
+    "SyncMetadata",
     "ToNumpy",
 ]
 
@@ -17,6 +18,7 @@ from typing import Any
 
 from ants.core import ANTsImage
 
+from niiflow.preproc.functional.image.metadata import sync_ants_metadata
 from niiflow.preproc.functional.image.reorientation import ants_reorient
 from niiflow.preproc.functional.image.utils import ants_to_numpy_with_metadata
 from niiflow.preproc.pipelines.pipeline_stages.pipeline_stage import PipelineStage
@@ -205,6 +207,58 @@ class Reorient(PipelineStage):
 
     def forward(self, **params: Any) -> dict[str, Any]:
         return {"out_image": ants_reorient(**params)}
+
+    def save_output(self, key: str, value: Any, output_path: Path) -> Path:
+        if key == "out_image":
+            return ants_image_write(value, output_path)
+        raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
+
+
+class SyncMetadata(PipelineStage):
+    """Copy spatial metadata from a reference image onto a target image.
+
+    Wraps :func:`~niiflow.preproc.functional.image.metadata.sync_ants_metadata`.
+    The images must share a voxel grid: shapes must match, and origin,
+    spacing, and direction must agree within configurable tolerances. The
+    output keeps ``image``'s voxel values; it is not resampled. A genuine
+    spatial mismatch raises rather than being silently overwritten.
+
+    **Parameters** (``params``):
+
+    * ``image`` — :class:`ants.core.ANTsImage` or path whose voxel values
+      are kept.
+    * ``reference`` — :class:`ants.core.ANTsImage` or path whose origin,
+      spacing, and direction are copied onto ``image`` when the grids match.
+    * ``origin_atol`` — absolute origin tolerance (default ``1e-5``).
+    * ``spacing_atol`` — absolute spacing tolerance (default ``1e-5``).
+    * ``direction_atol`` — absolute direction-matrix tolerance (default
+      ``1e-5``).
+    * ``rtol`` — relative tolerance applied to origin, spacing, and
+      direction (default ``0.0``).
+
+    **Outputs** (from :meth:`forward`):
+
+    * ``out_image`` — ``image`` with ``reference``'s spatial metadata.
+
+    **Persistence** (``save_outputs``):
+
+    * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
+    """
+
+    REQUIRED_PARAMS = frozenset({"image", "reference"})
+
+    def load_param(self, key: str, value: Any) -> Any:
+        if key in {"image", "reference"}:
+            if isinstance(value, ANTsImage):
+                return value
+            try:
+                return ants_image_read(value, reorient=True)
+            except Exception as e:
+                raise ValueError(f"Failed to read {key} from {value}") from e
+        return value
+
+    def forward(self, **params: Any) -> dict[str, Any]:
+        return {"out_image": sync_ants_metadata(**params)}
 
     def save_output(self, key: str, value: Any, output_path: Path) -> Path:
         if key == "out_image":

@@ -17,6 +17,7 @@ from .intensity_normalization import (
     z_transform_norm,
 )
 from .masks import ants_apply_mask, relabel_mask, smooth_mask
+from .metadata import sync_ants_metadata
 from .pipelines import ants_preprocess_brain_image
 from .registration import (
     ants_apply_transforms,
@@ -51,4 +52,5 @@ __all__ = [
     "ants_reorient",
     "ants_resample",
     "ants_resample_to_target",
+    "sync_ants_metadata",
 ]

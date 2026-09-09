@@ -22,6 +22,77 @@ NUMPY_DTYPE_ALIASES: dict[str, np.dtype[Any]] = {
 }
 
 
+def numeric_mismatch(
+    actual: Any,
+    expected: Any,
+    *,
+    atol: float,
+    rtol: float = 0.0,
+    name: str,
+    actual_label: str = "actual",
+    expected_label: str = "expected",
+) -> str | None:
+    """Return a mismatch description if `actual` and `expected` are not close.
+
+    Values are coerced to ``float64`` and compared with
+    :func:`numpy.allclose`. ``atol`` and ``rtol`` are validated here: they
+    must be finite and non-negative.
+
+    Args:
+        actual:
+            Observed value (scalar or array-like).
+        expected:
+            Reference value (scalar or array-like).
+        atol:
+            Absolute tolerance forwarded to :func:`numpy.allclose`.
+        rtol:
+            Relative tolerance forwarded to :func:`numpy.allclose`.
+        name:
+            Attribute or quantity name included in the mismatch text.
+        actual_label:
+            Label for `actual` in the mismatch text.
+        expected_label:
+            Label for `expected` in the mismatch text.
+
+    Returns:
+        ``None`` when the values match within tolerance, otherwise a
+        description of the shape or magnitude mismatch.
+
+    Raises:
+        TypeError: If `atol` or `rtol` is not a number.
+        ValueError: If `atol` or `rtol` is negative or non-finite.
+    """
+    parsed: list[float] = []
+    for value, label in zip((atol, rtol), ("atol", "rtol"), strict=True):
+        if isinstance(value, bool) or not isinstance(
+            value, (int, float, np.integer, np.floating)
+        ):
+            raise TypeError(f"`{label}` must be a number, got {type(value).__name__}")
+        coerced = float(value)
+        if not np.isfinite(coerced) or coerced < 0.0:
+            raise ValueError(
+                f"`{label}` must be a finite non-negative number, got {value}"
+            )
+        parsed.append(coerced)
+    atol, rtol = parsed
+    actual_arr = np.asarray(actual, dtype=np.float64)
+    expected_arr = np.asarray(expected, dtype=np.float64)
+    if actual_arr.shape != expected_arr.shape:
+        return (
+            f"{name} shape {actual_arr.shape} != {expected_arr.shape} "
+            f"({actual_label}={actual_arr.tolist()}, "
+            f"{expected_label}={expected_arr.tolist()})"
+        )
+    if np.allclose(actual_arr, expected_arr, atol=atol, rtol=rtol):
+        return None
+    max_diff = float(np.max(np.abs(actual_arr - expected_arr)))
+    return (
+        f"{name} max abs diff {max_diff} exceeds atol={atol}, rtol={rtol} "
+        f"({actual_label}={actual_arr.tolist()}, "
+        f"{expected_label}={expected_arr.tolist()})"
+    )
+
+
 def resolve_numpy_dtype(value: str | np.dtype[Any] | type[Any]) -> np.dtype[Any]:
     """Resolve a user-provided dtype string (or pass-through) to :class:`numpy.dtype`.
 

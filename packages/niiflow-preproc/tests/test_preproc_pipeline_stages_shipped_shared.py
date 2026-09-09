@@ -45,6 +45,7 @@ from niiflow.preproc.pipelines.pipeline_stages import (
     Reorient,
     RuntimeContext,
     SmoothMask,
+    SyncMetadata,
     ToNumpy,
     ZTransformNorm,
 )
@@ -91,6 +92,7 @@ SHIPPED_STAGE_CLASSES: tuple[StageFactory, ...] = (
     Rename,
     Reorient,
     ToNumpy,
+    SyncMetadata,
 )
 
 PRIMARY_SAVE_KEY: dict[StageFactory, str] = {
@@ -122,6 +124,7 @@ PRIMARY_SAVE_KEY: dict[StageFactory, str] = {
     Rename: "out_path",
     Reorient: "out_image",
     ToNumpy: "array",
+    SyncMetadata: "out_image",
 }
 
 
@@ -333,6 +336,17 @@ def _ants_resample_to_target_stage_config(
     )
 
 
+def _sync_metadata_stage_config(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    image = touch(tmp_path / "image.nii.gz")
+    reference = touch(tmp_path / "reference.nii.gz")
+    return (
+        {"image": str(image), "reference": str(reference)},
+        {"out_image": None},
+    )
+
+
 def _ants_preprocess_brain_image_stage_config(
     tmp_path: Path,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -371,6 +385,7 @@ STAGE_CONFIG_BUILDERS: dict[
     PointwiseArithmetic: _pointwise_arithmetic_stage_config,
     Reorient: _reorient_stage_config,
     ToNumpy: _to_numpy_stage_config,
+    SyncMetadata: _sync_metadata_stage_config,
 }
 
 STUB_FORWARD_OUTPUTS: dict[StageFactory, dict[str, Any]] = {
@@ -436,6 +451,7 @@ STUB_FORWARD_OUTPUTS: dict[StageFactory, dict[str, Any]] = {
     PointwiseArithmetic: {"out_image": object()},
     Reorient: {"out_image": object()},
     ToNumpy: {"array": object(), "metadata": {}},
+    SyncMetadata: {"out_image": object()},
 }
 
 

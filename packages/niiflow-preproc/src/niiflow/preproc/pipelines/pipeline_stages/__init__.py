@@ -30,6 +30,7 @@ __all__ = [
     "Rename",
     "Reorient",
     "SmoothMask",
+    "SyncMetadata",
     "ToNumpy",
     "ZTransformNorm",
     "create_pipeline_stage",
@@ -59,4 +60,4 @@ from .pipeline_stage_factory import (
     create_pipeline_stage,
     discover_pipeline_stage_classes,
 )
-from .utility import Delete, GetImage, Rename, Reorient, ToNumpy
+from .utility import Delete, GetImage, Rename, Reorient, SyncMetadata, ToNumpy

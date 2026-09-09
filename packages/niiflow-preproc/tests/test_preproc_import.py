@@ -19,6 +19,7 @@ def test_import_image_wrappers() -> None:
         ants_reorient,
         ants_resample,
         ants_resample_to_target,
+        sync_ants_metadata,
         ants_preprocess_brain_image,
         relabel_mask,
         smooth_mask,
@@ -35,4 +36,5 @@ def test_import_image_wrappers() -> None:
     assert callable(ants_reorient)
     assert callable(ants_resample)
     assert callable(ants_resample_to_target)
+    assert callable(sync_ants_metadata)
     assert callable(ants_preprocess_brain_image)
