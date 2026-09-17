@@ -16,6 +16,7 @@ import os
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -23,7 +24,6 @@ from niiflow.preproc.staging import StagedEntry, StagingErrorRecord
 from niiflow.preproc.workflows import (
     PlannableWorkflow,
     ProcessingWorkflow,
-    RunPlan,
 )
 from niiflow.preproc.workflows.execution_state import (
     ExecutionState,
@@ -132,26 +132,6 @@ class SleepingWorkflow(ProcessingWorkflow):
     @staticmethod
     def process_single(entry: StagedEntry) -> None:
         _sleep_then_record(entry)
-
-
-class PlanningWorkflow(PlannableWorkflow):
-    """Plannable workflow whose plan wraps each given path in one entry."""
-
-    @staticmethod
-    def process_single(entry: StagedEntry) -> None:
-        _record_call(entry)
-
-    def plan(self, source: list[Path]) -> RunPlan:
-        return RunPlan(
-            entries=tuple(
-                StagedEntry(
-                    active=Path(item).resolve(),
-                    id=f"plan-{index}",
-                    params={"out_dir": self.out_dir},  # type: ignore[attr-defined]
-                )
-                for index, item in enumerate(source)
-            )
-        )
 
 
 def _touch(path: Path) -> Path:
@@ -499,8 +479,10 @@ class TestRunEntries:
 
         returned = workflow.run_entries([selected], execution_state=state)
 
-        assert returned is state
-        assert state.get_status("selected") is ExecutionStatus.SUCCESS
+        assert returned is not state
+        assert returned.get_status("selected") is ExecutionStatus.SUCCESS
+        assert returned.get_status("outside") is ExecutionStatus.TIMEOUT
+        assert state.get_status("selected") is ExecutionStatus.PENDING
         assert state.get_status("outside") is ExecutionStatus.TIMEOUT
 
     def test_supplied_state_adds_unseen_requested_ids_as_pending(
@@ -515,10 +497,11 @@ class TestRunEntries:
 
         returned = workflow._prepare_execution_state([unseen], state)
 
-        assert returned is state
-        assert tuple(state.statuses) == ("historical", "unseen")
-        assert state.get_status("historical") is ExecutionStatus.TIMEOUT
-        assert state.get_status("unseen") is ExecutionStatus.PENDING
+        assert returned is not state
+        assert tuple(returned.statuses) == ("historical", "unseen")
+        assert returned.get_status("historical") is ExecutionStatus.TIMEOUT
+        assert returned.get_status("unseen") is ExecutionStatus.PENDING
+        assert state.statuses == {"historical": ExecutionStatus.TIMEOUT}
 
     def test_rejects_non_execution_state(
         self, workflow: RecordingWorkflow, tmp_path: Path
@@ -558,11 +541,16 @@ class TestRunEntries:
             run_statuses={ExecutionStatus.FAILURE},
         )
 
-        assert returned is state
+        assert returned is not state
         assert called == ["failure"]
-        assert state.statuses == {
+        assert returned.statuses == {
             "success": ExecutionStatus.SUCCESS,
             "failure": ExecutionStatus.SUCCESS,
+            "timeout": ExecutionStatus.TIMEOUT,
+        }
+        assert state.statuses == {
+            "success": ExecutionStatus.SUCCESS,
+            "failure": ExecutionStatus.FAILURE,
             "timeout": ExecutionStatus.TIMEOUT,
         }
 
@@ -630,17 +618,22 @@ class TestRunEntries:
         entry = _entry(tmp_path / "a.nii.gz", tmp_path / "out", entry_id="entry")
         state = ExecutionState.from_entries([entry])
         transitions: list[ExecutionStatus] = []
-        original_update = state.update
+        original_update = ExecutionState.update
 
-        def _record(updates: dict[str, ExecutionStatus]) -> None:
+        def _record(
+            target: ExecutionState,
+            updates: dict[str, ExecutionStatus],
+        ) -> None:
             transitions.extend(updates.values())
-            original_update(updates)
+            original_update(target, updates)
 
-        monkeypatch.setattr(state, "update", _record)
+        monkeypatch.setattr(ExecutionState, "update", _record)
 
-        workflow.run_entries([entry], execution_state=state)
+        returned = workflow.run_entries([entry], execution_state=state)
 
         assert transitions == [ExecutionStatus.RUNNING, ExecutionStatus.SUCCESS]
+        assert returned.get_status("entry") is ExecutionStatus.SUCCESS
+        assert state.get_status("entry") is ExecutionStatus.PENDING
 
     def test_state_is_saved_and_bound_before_processing(
         self,
@@ -651,11 +644,17 @@ class TestRunEntries:
         entry = _entry(tmp_path / "a.nii.gz", tmp_path / "out", entry_id="entry")
         state_path = tmp_path / "state.duckdb"
         observed: list[tuple[Path | None, bool]] = []
-        monkeypatch.setattr(
-            workflow,
-            "process_single",
-            lambda item: observed.append((state.path, state_path.is_file())),
-        )
+        run_serial = workflow._run_serial
+
+        def _inspect_state(
+            entries: list[StagedEntry],
+            execution_state: ExecutionState,
+            progress: Any,
+        ) -> None:
+            observed.append((execution_state.path, state_path.is_file()))
+            run_serial(entries, execution_state, progress)
+
+        monkeypatch.setattr(workflow, "_run_serial", _inspect_state)
         state = ExecutionState.from_entries([entry])
 
         returned = workflow.run_entries(
@@ -664,11 +663,78 @@ class TestRunEntries:
             save_execution_state_to=state_path,
         )
 
-        assert returned is state
+        assert returned is not state
         assert observed == [(state_path.resolve(), True)]
-        state.close()
+        assert returned.path == state_path.resolve()
+        assert returned._conn is None
+        assert state.path is None
+        assert state.get_status("entry") is ExecutionStatus.PENDING
         with ExecutionState.load(state_path) as restored:
             assert restored.get_status("entry") is ExecutionStatus.SUCCESS
+
+    def test_saving_loaded_state_to_new_path_does_not_modify_source(
+        self,
+        workflow: RecordingWorkflow,
+        tmp_path: Path,
+    ) -> None:
+        historical = _entry(
+            tmp_path / "historical.nii.gz",
+            tmp_path / "out",
+            entry_id="historical",
+        )
+        unseen = _entry(
+            tmp_path / "unseen.nii.gz",
+            tmp_path / "out",
+            entry_id="unseen",
+        )
+        source_path = tmp_path / "source.duckdb"
+        target_path = tmp_path / "target.duckdb"
+        source = ExecutionState.from_entries([historical])
+        source.update({"historical": ExecutionStatus.FAILURE})
+        source.save(source_path)
+
+        returned = workflow.run_entries(
+            [unseen],
+            execution_state=source,
+            save_execution_state_to=target_path,
+        )
+
+        assert returned is not source
+        assert returned.path == target_path.resolve()
+        assert returned._conn is None
+        assert source.path == source_path.resolve()
+        assert source.statuses == {"historical": ExecutionStatus.FAILURE}
+        assert source._conn is not None
+        source.close()
+
+        with ExecutionState.load(source_path) as restored_source:
+            assert restored_source.statuses == {"historical": ExecutionStatus.FAILURE}
+        with ExecutionState.load(target_path) as restored_target:
+            assert restored_target.statuses == {
+                "historical": ExecutionStatus.FAILURE,
+                "unseen": ExecutionStatus.SUCCESS,
+            }
+
+    def test_unsaved_loaded_state_is_forked_and_returned_connection_is_closed(
+        self,
+        workflow: RecordingWorkflow,
+        tmp_path: Path,
+    ) -> None:
+        entry = _entry(tmp_path / "a.nii.gz", tmp_path / "out", entry_id="entry")
+        state_path = tmp_path / "state.duckdb"
+        state = ExecutionState.from_entries([entry])
+        state.save(state_path)
+
+        returned = workflow.run_entries([entry], execution_state=state)
+
+        assert returned is not state
+        assert returned._conn is None
+        assert returned.get_status("entry") is ExecutionStatus.SUCCESS
+        assert state._conn is not None
+        assert state.get_status("entry") is ExecutionStatus.PENDING
+        state.close()
+        with ExecutionState.load(state_path) as restored:
+            assert restored.get_status("entry") is ExecutionStatus.PENDING
 
     def test_empty_workload_logs_completion_without_empty_state_summary(
         self,
@@ -918,15 +984,44 @@ class TestParallelExecution:
         assert result.outcome is _PoolExit.COMPLETE
         assert transitions == [ExecutionStatus.SUCCESS]
 
-    def test_scheduler_poll_interval_is_finite_without_timeout(
-        self, tmp_path: Path
+    def test_long_task_is_marked_running_without_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # !Too low-level. It should check instead that a task lasting long
-        # can still get marked as running without having a timeout. You can
-        # patch _MAX_POLL_INTERVAL to be smaller than the task duration instead
-        # of waiting full 0.5s.
-        wf = RecordingWorkflow(logs_root=tmp_path / "logs", timeout=None)
-        assert wf._poll_interval() == pytest.approx(0.5)
+        monkeypatch.setattr(
+            "niiflow.preproc.workflows.workflow._MAX_POLL_INTERVAL",
+            0.01,
+        )
+        active = _touch(tmp_path / "a.nii.gz")
+        entry = _entry(
+            active,
+            tmp_path / "out",
+            entry_id="entry",
+            slow_actives=(str(active),),
+            sleep_seconds=0.1,
+        )
+        state = ExecutionState.from_entries([entry])
+        transitions: list[ExecutionStatus] = []
+        update = ExecutionState.update
+
+        def _record(
+            target: ExecutionState,
+            updates: dict[str, ExecutionStatus],
+        ) -> None:
+            transitions.extend(updates.values())
+            update(target, updates)
+
+        monkeypatch.setattr(ExecutionState, "update", _record)
+        wf = SleepingWorkflow(
+            logs_root=tmp_path / "logs",
+            num_workers=2,
+            timeout=None,
+        )
+
+        returned = wf.run_entries([entry], execution_state=state)
+
+        assert transitions == [ExecutionStatus.RUNNING, ExecutionStatus.SUCCESS]
+        assert returned.get_status("entry") is ExecutionStatus.SUCCESS
+        assert state.get_status("entry") is ExecutionStatus.PENDING
 
     @pytest.mark.parametrize("num_workers", [2, 4])
     def test_each_entry_is_processed_exactly_once(
@@ -1373,63 +1468,6 @@ class TestPoolDrivingContracts:
             "continuing with previously observed start checkpoints"
         ]
 
-    def test_timeout_requeues_collateral_but_not_overdue_entry(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # !To me this test seems quite obvious, as we manually remove the overdue
-        # entry from the casualties, and consequently prevent requening. The "magic"
-        # of timeout handling is that the _mark_timeouts method automatically removes
-        # the overdue entry from the in_flight and hence the casualties.!
-        wf = RecordingWorkflow(logs_root=tmp_path / "logs", num_workers=2)
-        entries = [
-            _entry(
-                tmp_path / f"{name}.nii.gz",
-                tmp_path / "out",
-                entry_id=name,
-            )
-            for name in ("overdue", "collateral", "untouched")
-        ]
-        state = ExecutionState.from_entries(entries)
-        pool_runs: list[tuple[str, ...]] = []
-
-        def _drive_pool(
-            pending: deque[StagedEntry],
-            *args: object,
-            **kwargs: object,
-        ) -> _PoolResult:
-            pool_runs.append(tuple(entry.id for entry in pending))
-            if len(pool_runs) == 1:
-                overdue = pending.popleft()
-                collateral = pending.popleft()
-                state.update({overdue.id: ExecutionStatus.TIMEOUT})
-                return _PoolResult(
-                    _PoolExit.TIMEOUT,
-                    casualties=(collateral,),
-                    made_progress=True,
-                )
-            while pending:
-                state.update({pending.popleft().id: ExecutionStatus.SUCCESS})
-            return _PoolResult(_PoolExit.COMPLETE, made_progress=True)
-
-        monkeypatch.setattr(wf, "_drive_pool", _drive_pool)
-
-        wf._run_parallel(
-            entries,
-            state,
-            SimpleNamespace(),  # type: ignore[arg-type]
-            _Progress(),
-        )
-
-        assert pool_runs == [
-            ("overdue", "collateral", "untouched"),
-            ("collateral", "untouched"),
-        ]
-        assert state.statuses == {
-            "overdue": ExecutionStatus.TIMEOUT,
-            "collateral": ExecutionStatus.SUCCESS,
-            "untouched": ExecutionStatus.SUCCESS,
-        }
-
     def test_broken_pool_run_diagnoses_only_casualties_then_resumes_pending(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1661,7 +1699,15 @@ class TestIsolatedDiagnosis:
 
 
 class TestPoolTermination:
-    def test_uses_public_terminate_workers_when_available(self, tmp_path: Path) -> None:
+    def test_uses_public_terminate_workers_when_available(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "niiflow.preproc.workflows.workflow._PROCESS_TERMINATE_GRACE",
+            0.0,
+        )
         terminate_calls: list[None] = []
         shutdown_calls: list[tuple[bool, bool]] = []
 
@@ -1705,11 +1751,22 @@ class TestPoolTermination:
         assert shutdown_calls == []
         assert process.terminate_calls == 0
         assert process.kill_calls == 0
-        assert process.join_calls == 0
+        assert process.join_calls == 1
 
     def test_python_313_fallback_terminates_kills_and_reaps(
-        self, tmp_path: Path
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        monkeypatch.setattr(
+            "niiflow.preproc.workflows.workflow._PROCESS_TERMINATE_GRACE",
+            0.0,
+        )
+        monkeypatch.setattr(
+            "niiflow.preproc.workflows.workflow._PROCESS_KILL_GRACE",
+            0.0,
+        )
+
         class _Process:
             def __init__(self, *, survives_terminate: bool) -> None:
                 self.alive = True
@@ -1756,7 +1813,20 @@ class TestPoolTermination:
             for timeout in terminated.join_timeouts + survivor.join_timeouts
         )
 
-    def test_raises_if_worker_survives_kill(self, tmp_path: Path) -> None:
+    def test_raises_if_worker_survives_kill(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "niiflow.preproc.workflows.workflow._PROCESS_TERMINATE_GRACE",
+            0.0,
+        )
+        monkeypatch.setattr(
+            "niiflow.preproc.workflows.workflow._PROCESS_KILL_GRACE",
+            0.0,
+        )
+
         class _Process:
             def is_alive(self) -> bool:
                 return True
@@ -1845,12 +1915,11 @@ class TestTimeoutExecution:
         first = _touch(tmp_path / "first.nii.gz")
         second = _touch(tmp_path / "second.nii.gz")
         out_dir = tmp_path / "out"
-        # !Why not shorter timeout/sleep times?!
-        wf = SleepingWorkflow(logs_root=logs_dir, num_workers=num_workers, timeout=0.5)
+        wf = SleepingWorkflow(logs_root=logs_dir, num_workers=num_workers, timeout=0.1)
         params = {
             "out_dir": str(out_dir),
             "slow_actives": (str(first),),
-            "sleep_seconds": 1.5,
+            "sleep_seconds": 0.3,
         }
 
         wf.run_entries(
@@ -1872,12 +1941,11 @@ class TestTimeoutExecution:
         self, tmp_path: Path, logs_dir: Path
     ) -> None:
         active = _touch(tmp_path / "entry.nii.gz")
-        # !Why not shorter timeout/sleep times?!
-        wf = SleepingWorkflow(logs_root=logs_dir, num_workers=1, timeout=0.5)
+        wf = SleepingWorkflow(logs_root=logs_dir, num_workers=1, timeout=0.2)
         params = {
             "out_dir": str(tmp_path / "out"),
             "slow_actives": (str(active),),
-            "sleep_seconds": 0.2,
+            "sleep_seconds": 0.05,
         }
 
         wf.run_entries(
@@ -1936,11 +2004,10 @@ class TestTimeoutExecution:
         active = _touch(tmp_path / "entry.nii.gz")
         out_dir = tmp_path / "out"
         wf = SleepingWorkflow(logs_root=logs_dir, num_workers=2, timeout=None)
-        # !Why not shorter sleep time?!
         params = {
             "out_dir": str(out_dir),
             "slow_actives": (str(active),),
-            "sleep_seconds": 0.2,
+            "sleep_seconds": 0.05,
         }
 
         wf.run_entries(
@@ -1955,130 +2022,6 @@ class TestTimeoutExecution:
             "SUCCESS"
         ]
         assert _recorded(out_dir) == [active.resolve().as_posix()]
-
-
-# !Move to dedicated test file!
-class TestRunPlan:
-    def test_executes_plan_entries(self, tmp_path: Path) -> None:
-        out_dir = tmp_path / "out"
-        wf = PlanningWorkflow(logs_root=tmp_path / "logs")
-        wf.out_dir = str(out_dir)  # type: ignore[attr-defined]
-        actives = [tmp_path / f"img-{index}.nii.gz" for index in range(2)]
-        for active in actives:
-            active.write_bytes(b"")
-
-        wf.run_plan(wf.plan(actives))
-
-        assert set(_recorded(out_dir)) == {a.resolve().as_posix() for a in actives}
-
-    def test_run_plan_respects_start_end(self, tmp_path: Path) -> None:
-        out_dir = tmp_path / "out"
-        wf = PlanningWorkflow(logs_root=tmp_path / "logs")
-        wf.out_dir = str(out_dir)  # type: ignore[attr-defined]
-        actives = [tmp_path / f"img-{index}.nii.gz" for index in range(5)]
-        for active in actives:
-            active.write_bytes(b"")
-
-        wf.run_plan(wf.plan(actives), start=1, end=4)
-
-        assert _recorded(out_dir) == [a.resolve().as_posix() for a in actives[1:4]]
-
-    def test_run_plan_negative_end(self, tmp_path: Path) -> None:
-        out_dir = tmp_path / "out"
-        wf = PlanningWorkflow(logs_root=tmp_path / "logs")
-        wf.out_dir = str(out_dir)  # type: ignore[attr-defined]
-        actives = [tmp_path / f"img-{index}.nii.gz" for index in range(3)]
-        for active in actives:
-            active.write_bytes(b"")
-
-        wf.run_plan(wf.plan(actives), end=-1)
-
-        assert _recorded(out_dir) == [a.resolve().as_posix() for a in actives[:2]]
-
-    def test_rejects_non_run_plan(self, tmp_path: Path) -> None:
-        wf = PlanningWorkflow(logs_root=tmp_path / "logs")
-        with pytest.raises(TypeError, match="`plan` must be a RunPlan"):
-            wf.run_plan([])  # type: ignore[arg-type]
-
-    def test_empty_plan_is_a_noop(self, tmp_path: Path) -> None:
-        wf = PlanningWorkflow(logs_root=tmp_path / "logs")
-        wf.out_dir = str(tmp_path / "out")  # type: ignore[attr-defined]
-        wf.run_plan(RunPlan(entries=()))
-        assert _recorded(tmp_path / "out") == []
-
-    def test_forwards_state_save_path_statuses_and_returns_used_state(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        wf = PlanningWorkflow(logs_root=tmp_path / "logs")
-        wf.out_dir = str(tmp_path / "out")  # type: ignore[attr-defined]
-        plan = wf.plan([tmp_path / f"img-{index}.nii.gz" for index in range(4)])
-        state = ExecutionState.from_entries(plan.entries)
-        state.update({"plan-1": ExecutionStatus.FAILURE})
-        save_to = tmp_path / "state.duckdb"
-        calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
-
-        def _run_entries(
-            entries: tuple[StagedEntry, ...],
-            **kwargs: object,
-        ) -> ExecutionState:
-            calls.append((tuple(entry.id for entry in entries), kwargs))
-            return state
-
-        monkeypatch.setattr(wf, "run_entries", _run_entries)
-
-        returned = wf.run_plan(
-            plan,
-            start=-3,
-            end=-1,
-            execution_state=state,
-            save_execution_state_to=save_to,
-            run_statuses={ExecutionStatus.FAILURE},
-        )
-
-        assert returned is state
-        assert calls == [
-            (
-                ("plan-1", "plan-2"),
-                {
-                    "execution_state": state,
-                    "save_execution_state_to": save_to,
-                    "run_statuses": {ExecutionStatus.FAILURE},
-                },
-            )
-        ]
-
-    def test_slicing_is_applied_once_and_full_plan_state_is_accepted(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        wf = PlanningWorkflow(logs_root=tmp_path / "logs")
-        wf.out_dir = str(tmp_path / "out")  # type: ignore[attr-defined]
-        plan = wf.plan([tmp_path / f"img-{index}.nii.gz" for index in range(5)])
-        state = ExecutionState.from_entries(plan.entries)
-        original_slice = RunPlan.slice
-        slice_calls: list[tuple[int, int | None]] = []
-
-        def _slice(
-            instance: RunPlan, start: int = 0, end: int | None = None
-        ) -> RunPlan:
-            slice_calls.append((start, end))
-            return original_slice(instance, start, end)
-
-        monkeypatch.setattr(RunPlan, "slice", _slice)
-
-        returned = wf.run_plan(
-            plan,
-            start=1,
-            end=3,
-            execution_state=state,
-        )
-
-        assert returned is state
-        assert slice_calls == [(1, 3)]
-        assert state.get_status("plan-0") is ExecutionStatus.PENDING
-        assert state.get_status("plan-1") is ExecutionStatus.SUCCESS
-        assert state.get_status("plan-2") is ExecutionStatus.SUCCESS
-        assert state.get_status("plan-3") is ExecutionStatus.PENDING
-        assert state.get_status("plan-4") is ExecutionStatus.PENDING
 
 
 class TestLogging:

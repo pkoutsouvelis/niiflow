@@ -339,13 +339,18 @@ class RunPlan:
             path.unlink()
         conn = duckdb.connect(str(path))
         try:
-            conn.execute("""CREATE TABLE meta ( key VARCHAR PRIMARY KEY,
-
-                         value VARCHAR NOT NULL )
-                         """)
-            conn.execute("""CREATE TABLE entries ( entry_index INTEGER PRIMARY KEY, id
-                         VARCHAR NOT NULL UNIQUE, active VARCHAR NOT NULL, params
-                         VARCHAR NOT NULL, errors VARCHAR NOT NULL )""")
+            conn.execute(
+                "CREATE TABLE meta (key VARCHAR PRIMARY KEY, value VARCHAR NOT NULL)"
+            )
+            conn.execute(
+                "CREATE TABLE entries ("
+                "entry_index INTEGER PRIMARY KEY, "
+                "id VARCHAR NOT NULL UNIQUE, "
+                "active VARCHAR NOT NULL, "
+                "params VARCHAR NOT NULL, "
+                "errors VARCHAR NOT NULL"
+                ")"
+            )
             conn.execute(
                 "INSERT INTO meta VALUES (?, ?)",
                 ["plan_version", str(PLAN_VERSION)],
@@ -368,8 +373,9 @@ class RunPlan:
                         )
                     )
                 conn.executemany(
-                    """INSERT INTO entries (entry_index, id, active, params, errors)
-                    VALUES (?, ?, ?, ?, ?)""",
+                    "INSERT INTO entries "
+                    "(entry_index, id, active, params, errors) "
+                    "VALUES (?, ?, ?, ?, ?)",
                     rows,
                 )
         finally:
@@ -396,16 +402,16 @@ class RunPlan:
 
             if version == 1:  # Remove in 0.5.0
                 rows = conn.execute(
-                    """SELECT entry_index, active, params, errors FROM entries ORDER BY
-                    entry_index"""
+                    "SELECT entry_index, active, params, errors "
+                    "FROM entries "
+                    "ORDER BY entry_index"
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    """SELECT entry_index, id, active, params, errors FROM entries WHERE
-                    entry_index >= ?
-
-                    AND entry_index < ? ORDER BY entry_index
-                    """,
+                    "SELECT entry_index, id, active, params, errors "
+                    "FROM entries "
+                    "WHERE entry_index >= ? AND entry_index < ? "
+                    "ORDER BY entry_index",
                     [start_index, end_index],
                 ).fetchall()
         finally:

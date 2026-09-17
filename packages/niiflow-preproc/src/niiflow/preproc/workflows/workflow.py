@@ -21,6 +21,7 @@ from concurrent.futures.process import BrokenProcessPool
 from tqdm.auto import tqdm
 
 from niiflow.preproc.staging import StagedEntry
+from niiflow.preproc.utils.file import resolve_path
 from .execution_state import ExecutionState, ExecutionStatus
 from .logging_manager import LoggingManager, ParallelLogging
 from .logging_utils import reset_input_file_context, set_input_file_context
@@ -182,14 +183,17 @@ class ProcessingWorkflow(ABC):
             entries: Staged entries to consider for execution.
             execution_state: Existing state to validate and update. If omitted, a new
                 in-memory state is initialized with all supplied entries ``PENDING``.
+                Otherwise, the workflow operates on an independent snapshot unless
+                explicitly saving back to the state's current path.
             save_execution_state_to: Optional path at which to persist the prepared
                 execution state before execution. Subsequent status updates are written
-                through to that state file.
+                through to that state file. When ``execution_state`` is bound to a
+                different path, it is copied rather than rebound or modified.
             run_statuses: Execution statuses eligible to run. ``None`` selects all
                 supplied entries regardless of their current execution status.
 
         Returns:
-            The execution state used for this run.
+            The execution state used for this run, with its database connection closed.
 
         Notes:
             Entries with staging errors never enter execution and therefore retain their
@@ -197,13 +201,14 @@ class ProcessingWorkflow(ABC):
             execution failure.
         """
         entry_list = list(validate_staged_entries(entries))
-        state = self._prepare_execution_state(entry_list, execution_state)
+        state = self._prepare_execution_state(
+            entry_list,
+            execution_state,
+            save_execution_state_to,
+        )
 
         try:
             selected = self._filter_by_execution_status(entry_list, state, run_statuses)
-
-            if save_execution_state_to is not None:
-                state.save(save_execution_state_to)  # !Shouldn't we allow overwrite?!
 
             filtered_count = len(entry_list) - len(selected)
             if run_statuses is not None:
@@ -288,9 +293,15 @@ class ProcessingWorkflow(ABC):
     def _prepare_execution_state(
         entries: Sequence[StagedEntry],
         execution_state: ExecutionState | None,
+        save_execution_state_to: Path | str | None = None,
     ) -> ExecutionState:
         if execution_state is None:
-            return ExecutionState.from_entries(entries)
+            state = ExecutionState.from_entries(entries)
+
+            if save_execution_state_to is not None:
+                state.save(save_execution_state_to)
+
+            return state
 
         if not isinstance(execution_state, ExecutionState):
             raise TypeError(
@@ -298,8 +309,18 @@ class ProcessingWorkflow(ABC):
                 f"{type(execution_state).__name__}"
             )
 
-        execution_state.add_entries(entries)
-        return execution_state
+        if save_execution_state_to is None:
+            state = execution_state.fork()
+        else:
+            state = execution_state
+            target = resolve_path(save_execution_state_to)
+
+            if state.path != target:
+                state = state.fork()
+                state.save(target)
+
+        state.add_entries(entries)
+        return state
 
     @staticmethod
     def _filter_by_execution_status(
@@ -915,6 +936,30 @@ class ProcessingWorkflow(ABC):
         )
 
     @staticmethod
+    def _reap_processes(processes: Sequence[Any], timeout: float) -> list[Any]:
+        """Reap processes concurrently until all exit or the shared deadline passes."""
+        pending = list(processes)
+        deadline = time.monotonic() + timeout
+
+        while pending:
+            survivors = []
+            for process in pending:
+                try:
+                    process.join(timeout=0)
+                    if process.is_alive():
+                        survivors.append(process)
+                except (AssertionError, ProcessLookupError, ValueError):
+                    pass
+
+            if not survivors or time.monotonic() >= deadline:
+                return survivors
+
+            time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
+            pending = survivors
+
+        return []
+
+    @staticmethod
     def _terminate_pool(pool: ProcessPoolExecutor) -> None:
         """Force-stop and reap every worker; Python 3.13 needs a private fallback."""
         processes = dict(getattr(pool, "_processes", None) or {})
@@ -937,38 +982,23 @@ class ProcessingWorkflow(ABC):
                 except (ProcessLookupError, ValueError):
                     pass
 
-            # terminate() is asynchronous (SIGTERM on POSIX); briefly wait/reap before
-            # escalating surviving processes to kill().
-            deadline = time.monotonic() + _PROCESS_TERMINATE_GRACE
-            for process in processes.values():
-                try:
-                    process.join(timeout=max(0.0, deadline - time.monotonic()))
-                except (AssertionError, ValueError):
-                    pass
-
-        survivors = []
-        for process in processes.values():
+        # terminate() is asynchronous (SIGTERM on POSIX). Poll all workers within one
+        # shared grace window so an earlier join cannot starve later workers.
+        survivors = ProcessingWorkflow._reap_processes(
+            list(processes.values()),
+            _PROCESS_TERMINATE_GRACE,
+        )
+        for process in survivors:
             try:
                 if process.is_alive():
                     process.kill()
-                    survivors.append(process)
             except (ProcessLookupError, ValueError):
                 pass
 
-        deadline = time.monotonic() + _PROCESS_KILL_GRACE
-        for process in survivors:
-            try:
-                process.join(timeout=max(0.0, deadline - time.monotonic()))
-            except (AssertionError, ValueError):
-                pass
-
-        unreaped = []
-        for process in processes.values():
-            try:
-                if process.is_alive():
-                    unreaped.append(process)
-            except (ProcessLookupError, ValueError):
-                pass
+        unreaped = ProcessingWorkflow._reap_processes(
+            survivors,
+            _PROCESS_KILL_GRACE,
+        )
 
         if unreaped:
             raise RuntimeError(

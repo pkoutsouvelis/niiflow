@@ -181,7 +181,7 @@ def dynamic_workflow(
     save_execution_state_to: Path | str | None = None,
     from_plan: Path | str | None = None,
     from_execution_state: Path | str | None = None,
-    run_statuses: Collection[ExecutionStatus] | None = None,
+    run_statuses: Collection[ExecutionStatus | str] | None = None,
     plan_only: bool = False,
     dry_run: bool = False,
     start: int = 0,
@@ -240,8 +240,9 @@ def dynamic_workflow(
         from_plan: Path to a saved plan to load and execute, skipping planning.
         from_execution_state: Optional path to a saved execution state to load
             before execution.
-        run_statuses: Optional execution statuses eligible to run. ``None``
-            selects all entries supplied to execution.
+        run_statuses: Optional execution statuses eligible to run, supplied as
+            :class:`ExecutionStatus` members or their string values. ``None`` selects
+            all entries supplied to execution.
         plan_only: When ``True``, stop after planning and do not execute.
         dry_run: When ``True``, print the plan via :meth:`RunPlan.view` and do
             not execute. Newly generated plans are not saved.
@@ -255,6 +256,11 @@ def dynamic_workflow(
             workflow constructor.
     """
     slicing = start != 0 or end is not None
+    if run_statuses is not None:
+        raw_statuses = (
+            (run_statuses,) if isinstance(run_statuses, str) else run_statuses
+        )
+        run_statuses = {ExecutionStatus(status) for status in raw_statuses}
 
     if from_plan is not None:
         if plan_only:
@@ -309,12 +315,16 @@ def dynamic_workflow(
             if from_execution_state is not None
             else None
         )
-        workflow.run_plan(
-            run_plan,
-            execution_state=execution_state,
-            save_execution_state_to=save_execution_state_to,
-            run_statuses=run_statuses,
-        )
+        try:
+            workflow.run_plan(
+                run_plan,
+                execution_state=execution_state,
+                save_execution_state_to=save_execution_state_to,
+                run_statuses=run_statuses,
+            )
+        finally:
+            if execution_state is not None:
+                execution_state.close()
         return
 
     if settings is None:
@@ -363,11 +373,15 @@ def dynamic_workflow(
         if from_execution_state is not None
         else None
     )
-    workflow.run_plan(
-        run_plan,
-        start=start,
-        end=end,
-        execution_state=execution_state,
-        save_execution_state_to=save_execution_state_to,
-        run_statuses=run_statuses,
-    )
+    try:
+        workflow.run_plan(
+            run_plan,
+            start=start,
+            end=end,
+            execution_state=execution_state,
+            save_execution_state_to=save_execution_state_to,
+            run_statuses=run_statuses,
+        )
+    finally:
+        if execution_state is not None:
+            execution_state.close()

@@ -111,9 +111,9 @@ class ExecutionState:
             meta = {str(key): str(value) for key, value in meta_rows}
             _read_execution_state_version(meta)
 
-            rows = conn.execute("""SELECT entry_index, id, status
-                   FROM entries
-                   ORDER BY entry_index""").fetchall()
+            rows = conn.execute(
+                "SELECT entry_index, id, status " "FROM entries " "ORDER BY entry_index"
+            ).fetchall()
 
             statuses: dict[str, ExecutionStatus] = {}
             for index, entry_id, raw_status in rows:
@@ -168,6 +168,10 @@ class ExecutionState:
 
         return cls(_statuses=statuses)
 
+    def fork(self) -> ExecutionState:
+        """Return an independent, unbound snapshot of this execution state."""
+        return ExecutionState(_statuses=self._statuses.copy())
+
     @property
     def path(self) -> Path | None:
         """Bound DuckDB path, or ``None`` while the state is in memory only."""
@@ -207,7 +211,7 @@ class ExecutionState:
             conn.execute("BEGIN TRANSACTION")
             try:
                 conn.executemany(
-                    """INSERT INTO entries (entry_index, id, status) VALUES (?, ?, ?)""",
+                    "INSERT INTO entries (entry_index, id, status) VALUES (?, ?, ?)",
                     [
                         (
                             start_index + offset,
@@ -254,15 +258,21 @@ class ExecutionState:
 
         try:
             conn = duckdb.connect(str(temporary))
-            conn.execute("""CREATE TABLE meta ( key VARCHAR PRIMARY KEY, value VARCHAR
-                         NOT NULL )""")
+            conn.execute(
+                "CREATE TABLE meta ("
+                "key VARCHAR PRIMARY KEY, "
+                "value VARCHAR NOT NULL"
+                ")"
+            )
             allowed = ", ".join(f"'{status.value}'" for status in ExecutionStatus)
-            conn.execute(f"""CREATE TABLE entries (
-                        entry_index INTEGER PRIMARY KEY,
-                        id VARCHAR NOT NULL UNIQUE,
-                        status VARCHAR NOT NULL
-                            CHECK (status IN ({allowed}))
-                    )""")
+            conn.execute(
+                "CREATE TABLE entries ("
+                "entry_index INTEGER PRIMARY KEY, "
+                "id VARCHAR NOT NULL UNIQUE, "
+                "status VARCHAR NOT NULL "
+                f"CHECK (status IN ({allowed}))"
+                ")"
+            )
             conn.execute(
                 "INSERT INTO meta VALUES (?, ?)",
                 [
@@ -277,7 +287,7 @@ class ExecutionState:
 
             if self._statuses:
                 conn.executemany(
-                    """INSERT INTO entries (entry_index, id, status) VALUES (?, ?, ?)""",
+                    "INSERT INTO entries (entry_index, id, status) VALUES (?, ?, ?)",
                     [
                         (index, entry_id, status.value)
                         for index, (entry_id, status) in enumerate(

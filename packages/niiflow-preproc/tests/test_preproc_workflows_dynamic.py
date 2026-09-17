@@ -168,9 +168,7 @@ class TestDynamicWorkflowStagingWorkers:
     @pytest.mark.parametrize("value", ["auto", 1.5, None, True])
     def test_rejects_invalid_type(self, tmp_path: Path, value: object) -> None:
         with pytest.raises(ValueError, match="integer >= 1"):
-            _workflow(
-                logs_root=tmp_path / "logs", staging_workers=value
-            )  # type: ignore[arg-type]
+            _workflow(logs_root=tmp_path / "logs", staging_workers=value)  # type: ignore[arg-type]
 
 
 class TestDynamicWorkflowPlan:
@@ -767,8 +765,13 @@ class TestDynamicWorkflow:
         file_path.write_bytes(b"")
         state_path = tmp_path / "resume.duckdb"
         save_state_path = tmp_path / "updated.duckdb"
-        loaded_state = object()
-        statuses = {ExecutionStatus.FAILURE, ExecutionStatus.TIMEOUT}
+        loaded_state = ExecutionState.from_entries([])
+        state_closes: list[None] = []
+        statuses = {"FAILURE", "TIMEOUT"}
+        expected_statuses = {
+            ExecutionStatus.FAILURE,
+            ExecutionStatus.TIMEOUT,
+        }
         loaded_from: list[Path | str] = []
         run_calls: list[tuple[RunPlan, dict[str, Any]]] = []
 
@@ -785,6 +788,11 @@ class TestDynamicWorkflow:
             return loaded_state
 
         monkeypatch.setattr(ExecutionState, "load", classmethod(_load))
+        monkeypatch.setattr(
+            loaded_state,
+            "close",
+            lambda: state_closes.append(None),
+        )
         monkeypatch.setattr(DynamicProcessingWorkflow, "run_plan", _run_plan)
 
         dynamic_workflow(
@@ -804,8 +812,9 @@ class TestDynamicWorkflow:
             "end": None,
             "execution_state": loaded_state,
             "save_execution_state_to": save_state_path,
-            "run_statuses": statuses,
+            "run_statuses": expected_statuses,
         }
+        assert state_closes == [None]
 
     def test_from_plan_forwards_execution_state_options(
         self,
@@ -818,7 +827,8 @@ class TestDynamicWorkflow:
         expected_plan = _workflow().plan(file_path, save_plan_to=plan_path)
         state_path = tmp_path / "resume.duckdb"
         save_state_path = tmp_path / "updated.duckdb"
-        loaded_state = object()
+        loaded_state = ExecutionState.from_entries([])
+        state_closes: list[None] = []
         statuses = {ExecutionStatus.PENDING, ExecutionStatus.FAILURE}
         loaded_from: list[Path | str] = []
         run_calls: list[tuple[RunPlan, dict[str, Any]]] = []
@@ -836,6 +846,11 @@ class TestDynamicWorkflow:
             return loaded_state
 
         monkeypatch.setattr(ExecutionState, "load", classmethod(_load))
+        monkeypatch.setattr(
+            loaded_state,
+            "close",
+            lambda: state_closes.append(None),
+        )
         monkeypatch.setattr(DynamicProcessingWorkflow, "run_plan", _run_plan)
 
         dynamic_workflow(
@@ -854,6 +869,7 @@ class TestDynamicWorkflow:
             "save_execution_state_to": save_state_path,
             "run_statuses": statuses,
         }
+        assert state_closes == [None]
 
     @pytest.mark.parametrize("mode", ["dry_run", "plan_only", "from_plan_dry_run"])
     def test_non_execution_modes_skip_execution_state_io(

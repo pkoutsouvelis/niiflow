@@ -615,6 +615,29 @@ class TestExecutionStateConcat:
         assert combined.path is None
 
 
+class TestExecutionStateFork:
+    def test_returns_independent_unbound_snapshot(self, tmp_path: Path) -> None:
+        state = _state(tmp_path, "one", "two")
+        state.update({"one": ExecutionStatus.SUCCESS})
+        path = state.save(tmp_path / "state.duckdb")
+
+        forked = state.fork()
+        forked.update({"two": ExecutionStatus.FAILURE})
+
+        assert forked is not state
+        assert forked.path is None
+        assert forked.statuses == {
+            "one": ExecutionStatus.SUCCESS,
+            "two": ExecutionStatus.FAILURE,
+        }
+        assert state.path == path
+        assert state.statuses == {
+            "one": ExecutionStatus.SUCCESS,
+            "two": ExecutionStatus.PENDING,
+        }
+        state.close()
+
+
 class TestExecutionStatePersistence:
     def test_in_memory_updates_do_not_bind_state(self, tmp_path: Path) -> None:
         state = _state(tmp_path, "one")
