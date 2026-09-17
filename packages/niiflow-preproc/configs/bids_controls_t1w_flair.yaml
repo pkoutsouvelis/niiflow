@@ -55,7 +55,7 @@ settings:
               mirror:
                 source: rawdata
                 target: derivatives/niiflow
-            name: "{active.name|strip:_T1w.nii.gz}_desc-brain_T1w.nii.gz"
+            name: "{active.name|rstrip:_T1w.nii.gz}_desc-brain_T1w.nii.gz"
           brain_mask:
             root:
               mode: parent_match
@@ -63,7 +63,7 @@ settings:
               mirror:
                 source: rawdata
                 target: derivatives/niiflow
-            name: "{active.name|strip:_T1w.nii.gz}_desc-brain_mask.nii.gz"
+            name: "{active.name|rstrip:_T1w.nii.gz}_desc-brain_mask.nii.gz"
     order: [qc, strip]
 
 inputs:

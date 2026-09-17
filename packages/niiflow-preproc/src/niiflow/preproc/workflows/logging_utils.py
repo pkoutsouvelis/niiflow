@@ -13,12 +13,12 @@ __all__ = [
 import contextvars
 import logging
 from logging.handlers import QueueHandler
-from multiprocessing import Queue
+from typing import Any
 
 BLUE = "\033[94m"
 RESET = "\033[0m"
 
-_DEFAULT_ENQUEUE_TIMEOUT = 1.0
+DEFAULT_ENQUEUE_TIMEOUT = 0.25
 
 _input_file_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "input_file", default="-"
@@ -26,43 +26,58 @@ _input_file_var: contextvars.ContextVar[str] = contextvars.ContextVar(
 
 
 class BlockingQueueHandler(QueueHandler):
-    """Forward worker records to the main-process listener without dropping them.
+    """Forward worker records without allowing logging to stall processing.
 
-    The stdlib :class:`QueueHandler` uses ``put_nowait``; when the
-    :class:`multiprocessing.Queue` pipe buffer is full, records are discarded via
-    ``handleError`` (often silently). Under parallel load that produces short log bursts
-    per entry, most worker records can be lost while main-process status logging remains
-    complete.
-
-    Uses a short blocking timeout so a backed-up log queue cannot stall pipeline workers
-    for long periods (e.g. on slow network filesystems).
+    A bounded wait absorbs short bursts. If the main-process listener remains
+    backlogged, the record is dropped and a best-effort shared counter is incremented.
+    Logging transport errors never recurse through :meth:`handleError`.
     """
 
     def __init__(
         self,
-        queue: Queue,
+        queue: Any,
         *,
-        enqueue_timeout: float | None = _DEFAULT_ENQUEUE_TIMEOUT,
+        enqueue_timeout: float = DEFAULT_ENQUEUE_TIMEOUT,
+        suppressed_count: Any | None = None,
     ) -> None:
+        if enqueue_timeout < 0:
+            raise ValueError("`enqueue_timeout` must be non-negative")
         super().__init__(queue)
-        self.enqueue_timeout = enqueue_timeout
+        self.enqueue_timeout = float(enqueue_timeout)
+        self.suppressed_count = suppressed_count
+        self.local_suppressed_count = 0
 
     def enqueue(self, record: logging.LogRecord) -> None:
         try:
-            if self.enqueue_timeout is None:
-                self.queue.put(record)  # type: ignore[attr-defined]
-            else:
-                self.queue.put(  # type: ignore[attr-defined]
-                    record, block=True, timeout=self.enqueue_timeout
-                )
+            self.queue.put(  # type: ignore[attr-defined]
+                record, block=True, timeout=self.enqueue_timeout
+            )
         except Exception:
-            self.handleError(record)
+            self._record_suppressed()
+
+    def handleError(self, record: logging.LogRecord) -> None:
+        """Drop records that fail preparation without recursive diagnostics."""
+        self._record_suppressed()
+
+    def _record_suppressed(self) -> None:
+        """Increment local and shared best-effort suppression counts."""
+        self.local_suppressed_count += 1
+        if self.suppressed_count is None:
+            return
+        try:
+            # Deliberately lock-free: an approximate count is preferable to making
+            # worker liveness depend on acquiring another multiprocessing lock.
+            self.suppressed_count.value += 1
+        except Exception:
+            pass
 
 
 def setup_worker_logging(
-    log_queue: Queue,
+    log_queue: Any,
     dev_mode: bool,
     worker_logs: bool,
+    enqueue_timeout: float = DEFAULT_ENQUEUE_TIMEOUT,
+    suppressed_count: Any | None = None,
 ) -> None:
     """Configure the worker-process root logger.
 
@@ -88,7 +103,11 @@ def setup_worker_logging(
     root = logging.getLogger()
     root.setLevel(level)
     root.handlers.clear()
-    handler = BlockingQueueHandler(log_queue)
+    handler = BlockingQueueHandler(
+        log_queue,
+        enqueue_timeout=enqueue_timeout,
+        suppressed_count=suppressed_count,
+    )
     handler.addFilter(ContextVarFilter())
     root.addHandler(handler)
 

@@ -8,6 +8,7 @@ __all__ = [
 ]
 
 import json
+import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,14 +17,17 @@ from typing import Any
 import duckdb
 
 from niiflow.preproc.staging import StagedEntry, StagingErrorRecord
+from niiflow.preproc.staging.stager import _reconcile_entry_ids
+from niiflow.preproc.utils.decorators import deprecate
 from niiflow.preproc.utils.file import (
     json_safe,
     read_json,
     resolve_path,
     write_json,
 )
+from .validation import validate_staged_entries
 
-PLAN_VERSION = 1
+PLAN_VERSION = 2
 
 
 def _error_to_record(error: StagingErrorRecord) -> dict[str, Any]:
@@ -31,6 +35,7 @@ def _error_to_record(error: StagingErrorRecord) -> dict[str, Any]:
         "active": str(error.active),
         "message": error.message,
         "stage": error.stage,
+        "entry_id": error.entry_id,
         "entry_index": error.entry_index,
         "error_type": error.error_type,
     }
@@ -41,6 +46,7 @@ def _error_from_record(data: dict[str, Any]) -> StagingErrorRecord:
         active=Path(data["active"]),
         message=str(data["message"]),
         stage=data.get("stage"),
+        entry_id=data.get("entry_id"),
         entry_index=data.get("entry_index"),
         error_type=data.get("error_type"),
     )
@@ -49,13 +55,24 @@ def _error_from_record(data: dict[str, Any]) -> StagingErrorRecord:
 def _entry_to_record(index: int, entry: StagedEntry) -> dict[str, Any]:
     return {
         "entry_index": index,
+        "id": entry.id,
         "active": str(entry.active),
         "params": json_safe(entry.params),
         "errors": [_error_to_record(error) for error in entry.errors],
     }
 
 
-def _entry_from_record(record: dict[str, Any]) -> StagedEntry:
+def _entry_from_record(
+    record: dict[str, Any],
+    *,
+    plan_version: int,
+) -> StagedEntry:
+    entry_id = record.get("id")
+    if plan_version == 1 and not entry_id:
+        entry_id = str(Path(record["active"]))
+    if not isinstance(entry_id, str) or not entry_id:
+        raise ValueError("Plan entry `id` must be a non-empty string")
+
     params = record["params"]
     if isinstance(params, str):
         params = json.loads(params)
@@ -70,12 +87,13 @@ def _entry_from_record(record: dict[str, Any]) -> StagedEntry:
 
     return StagedEntry(
         active=Path(record["active"]),
+        id=entry_id,
         params=params,
         errors=tuple(_error_from_record(item) for item in errors),
     )
 
 
-def _read_plan_version(meta: dict[str, str]) -> None:
+def _read_plan_version(meta: dict[str, str]) -> int:
     raw = meta.get("plan_version")
     if raw is None:
         raise ValueError("Plan file is missing `plan_version` metadata")
@@ -83,8 +101,20 @@ def _read_plan_version(meta: dict[str, str]) -> None:
         version = int(raw)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Invalid `plan_version` metadata: {raw!r}") from exc
-    if version != PLAN_VERSION:
-        raise ValueError(f"Unsupported plan version {version}; expected {PLAN_VERSION}")
+
+    if version == 1:
+        warnings.warn(
+            "RunPlan version 1 is deprecated and will be removed in a version "
+            "0.5.0. Re-save the plan to upgrade it.",
+            FutureWarning,
+            stacklevel=3,
+        )
+    elif version != PLAN_VERSION:
+        raise ValueError(
+            f"Unsupported plan version {version}; expected 1 or {PLAN_VERSION}"
+        )
+
+    return version
 
 
 def _resolve_entry_bounds(start: int, end: int | None, count: int) -> tuple[int, int]:
@@ -135,9 +165,10 @@ def _plan_suffix(path: Path) -> str:
 class RunPlan:
     """Staged entries ready for execution.
 
-    Inspect with :meth:`view`, persist with :meth:`save` (``.duckdb`` for production
-    scale, ``.json`` for debug), and reload with :meth:`load`. Use :meth:`slice` or
-    ranged :meth:`load` to select a contiguous window of plan entry indices.
+    Inspect with :meth:`view`, persist with :meth:`save` (``.duckdb`` recommended;
+    ``.json`` is deprecated and will be removed in v0.5.0), and reload with
+    :meth:`load`. Use :meth:`slice` or ranged :meth:`load` to select a contiguous window
+    of plan entry indices.
     """
 
     entries: tuple[StagedEntry, ...]
@@ -159,6 +190,7 @@ class RunPlan:
         for index, entry in enumerate(self.entries):
             lines.append("")
             lines.append(f"Entry {index}")
+            lines.append(f"  id: {entry.id}")
             lines.append(f"  active: {entry.active}")
             if entry.errors:
                 lines.append("  staging errors:")
@@ -215,7 +247,8 @@ class RunPlan:
     def save(self, path: Path | str) -> Path:
         """Write this plan to ``path``.
 
-        Uses DuckDB for ``.duckdb`` files and JSON for ``.json`` files.
+        Uses DuckDB for ``.duckdb`` files. JSON (``.json``) remains available until
+        v0.5.0 but emits :class:`DeprecationWarning`.
         """
         resolved = resolve_path(path)
         resolved.parent.mkdir(parents=True, exist_ok=True)
@@ -235,8 +268,10 @@ class RunPlan:
         """Load a plan previously written with :meth:`save`.
 
         Optional ``start`` / ``end`` select a contiguous window of plan entry indices
-        (including staging-failed entries). For ``.duckdb`` plans only the selected rows
-        are materialized; ``.json`` plans are parsed then sliced.
+        (including staging-failed entries). Current-version ``.duckdb`` plans
+        materialize only the selected rows; deprecated version-1 plans are fully loaded
+        first so synthesized IDs are reconciled consistently. JSON (``.json``) plans are
+        parsed then sliced; that format is deprecated and will be removed in v0.5.0.
         """
         resolved = resolve_path(path)
         if not resolved.is_file():
@@ -246,6 +281,7 @@ class RunPlan:
             return cls._load_json(resolved, start=start, end=end)
         return cls._load_duckdb(resolved, start=start, end=end)
 
+    @deprecate(remove_in="0.5.0", alternative=".duckdb")
     def _save_json(self, path: Path) -> Path:
         return write_json(
             {
@@ -260,6 +296,7 @@ class RunPlan:
         )
 
     @classmethod
+    @deprecate(remove_in="0.5.0", alternative=".duckdb")
     def _load_json(
         cls,
         path: Path,
@@ -268,13 +305,34 @@ class RunPlan:
         end: int | None = None,
     ) -> RunPlan:
         payload = read_json(path)
-        _read_plan_version({"plan_version": str(payload.get("plan_version", ""))})
-        entries = payload.get("entries")
-        if not isinstance(entries, list):
+        meta = (
+            {"plan_version": str(payload["plan_version"])}
+            if "plan_version" in payload
+            else {}
+        )
+        version = _read_plan_version(meta)
+        records = payload.get("entries")
+        if not isinstance(records, list):
             raise TypeError("Plan document must contain an `entries` list")
-        start_index, end_index = _resolve_entry_bounds(start, end, len(entries))
-        selected = entries[start_index:end_index]
-        return cls(entries=tuple(_entry_from_record(item) for item in selected))
+
+        start_index, end_index = _resolve_entry_bounds(start, end, len(records))
+
+        if version == 1:  # Remove in 0.5.0
+            entries = tuple(
+                _reconcile_entry_ids(
+                    [_entry_from_record(item, plan_version=version) for item in records]
+                )
+            )
+            return cls(entries=entries[start_index:end_index])
+
+        selected = records[start_index:end_index]
+        return cls(
+            entries=validate_staged_entries(
+                tuple(
+                    _entry_from_record(item, plan_version=version) for item in selected
+                )
+            )
+        )
 
     def _save_duckdb(self, path: Path) -> Path:
         if path.exists():
@@ -285,11 +343,9 @@ class RunPlan:
 
                          value VARCHAR NOT NULL )
                          """)
-            conn.execute("""CREATE TABLE entries ( entry_index INTEGER PRIMARY KEY,
-                         active VARCHAR NOT NULL, params VARCHAR NOT NULL,
-
-                         errors VARCHAR NOT NULL )
-                         """)
+            conn.execute("""CREATE TABLE entries ( entry_index INTEGER PRIMARY KEY, id
+                         VARCHAR NOT NULL UNIQUE, active VARCHAR NOT NULL, params
+                         VARCHAR NOT NULL, errors VARCHAR NOT NULL )""")
             conn.execute(
                 "INSERT INTO meta VALUES (?, ?)",
                 ["plan_version", str(PLAN_VERSION)],
@@ -305,14 +361,15 @@ class RunPlan:
                     rows.append(
                         (
                             index,
+                            entry.id,
                             str(entry.active),
                             json.dumps(record["params"]),
                             json.dumps(record["errors"]),
                         )
                     )
                 conn.executemany(
-                    """INSERT INTO entries (entry_index, active, params, errors) VALUES
-                    (?, ?, ?, ?)""",
+                    """INSERT INTO entries (entry_index, id, active, params, errors)
+                    VALUES (?, ?, ?, ?, ?)""",
                     rows,
                 )
         finally:
@@ -331,32 +388,61 @@ class RunPlan:
         try:
             meta_rows = conn.execute("SELECT key, value FROM meta").fetchall()
             meta = {row[0]: row[1] for row in meta_rows}
-            _read_plan_version(meta)
+            version = _read_plan_version(meta)
 
             count_row = conn.execute("SELECT COUNT(*) FROM entries").fetchone()
             count = int(count_row[0]) if count_row is not None else 0
             start_index, end_index = _resolve_entry_bounds(start, end, count)
 
-            rows = conn.execute(
-                """SELECT entry_index, active, params, errors FROM entries WHERE
-                entry_index >= ?
+            if version == 1:  # Remove in 0.5.0
+                rows = conn.execute(
+                    """SELECT entry_index, active, params, errors FROM entries ORDER BY
+                    entry_index"""
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT entry_index, id, active, params, errors FROM entries WHERE
+                    entry_index >= ?
 
-                AND entry_index < ? ORDER BY entry_index
-                """,
-                [start_index, end_index],
-            ).fetchall()
+                    AND entry_index < ? ORDER BY entry_index
+                    """,
+                    [start_index, end_index],
+                ).fetchall()
         finally:
             conn.close()
 
-        entries = tuple(
-            _entry_from_record(
-                {
-                    "entry_index": row[0],
-                    "active": row[1],
-                    "params": row[2],
-                    "errors": row[3],
-                }
+        if version == 1:  # Remove in 0.5.0
+            entries = tuple(
+                _reconcile_entry_ids(
+                    [
+                        _entry_from_record(
+                            {
+                                "entry_index": row[0],
+                                "active": row[1],
+                                "params": row[2],
+                                "errors": row[3],
+                            },
+                            plan_version=version,
+                        )
+                        for row in rows
+                    ]
+                )
             )
-            for row in rows
+            return cls(entries=entries[start_index:end_index])
+
+        entries = validate_staged_entries(
+            tuple(
+                _entry_from_record(
+                    {
+                        "entry_index": row[0],
+                        "id": row[1],
+                        "active": row[2],
+                        "params": row[3],
+                        "errors": row[4],
+                    },
+                    plan_version=version,
+                )
+                for row in rows
+            )
         )
         return cls(entries=entries)

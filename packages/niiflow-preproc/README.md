@@ -190,7 +190,9 @@ Staging resolves *additional* inputs and outputs around each active file **witho
 rewriting the active anchor**. A `FileStager` is configured with `pointers` — dotted
 paths into the pipeline `params` — each marked `"input"` or `"output"`:
 
-- **input** pointers may be an explicit path or a *search spec* (`root` + `search`).
+- **input** pointers may be an explicit path, a *search spec* (`root` + `search`),
+  or a *name spec* (`root` + `name`, the same shape as an output pointer).
+  A mapping input must define exactly one of `search` or `name`.
 - **output** pointers build a target path from a discovered `root` plus a `name`.
 - `allow_overwrite` defaults to `true`, so re-staging may replace existing
 derivative paths. Set it to `false` to treat existing outputs as already done
@@ -245,7 +247,7 @@ pipeline_params:
             mirror:
               source: "rawdata"
               target: "derivatives/niiflow"
-          name: "{active.name|strip:_T1w.nii.gz}_desc-brain_T1w.nii.gz"
+          name: "{active.name|rstrip:_T1w.nii.gz}_desc-brain_T1w.nii.gz"
         brain_mask:
           root:
             mode: parent_match
@@ -253,7 +255,7 @@ pipeline_params:
             mirror:
               source: "rawdata"
               target: "derivatives/niiflow"
-          name: "{active.name|strip:_T1w.nii.gz}_desc-brain_mask.nii.gz"
+          name: "{active.name|rstrip:_T1w.nii.gz}_desc-brain_mask.nii.gz"
   order: [qc, strip]
 
 staging_params:
@@ -272,8 +274,9 @@ QC and strip inputs, writes the QC report under `derivatives/niiflow/qc/...`, an
 writes skull-stripped outputs under `derivatives/niiflow/...` when QC passes.
 
 Supported references inside specs: `{active}`, `{active.name|stem|parent}`, and
-`{params.<dotted.path>[.<attr>]}`, with a `|strip:<suffix>` modifier
-(e.g. `{active.name|strip:_T1w.nii.gz}`). `resolve_results` may be `first`, `single`, or `all`.
+`{params.<dotted.path>[.<attr>]}`, with modifiers such as `|rstrip:<suffix>`
+and `|replace:<old>,<new>` (e.g. `{active.name|rstrip:_T1w.nii.gz}`).
+`resolve_results` may be `first`, `single`, or `all`.
 
 `staging_params` accepts a single `{stager_name, params}` dict or a **list** of such
 dicts; when a list is provided, stagers run **in order**, each transforming the entries
@@ -301,7 +304,7 @@ Registered names for `stager_name` (via `create_stager` / `staging_params`):
 
 - `FileStager` — resolve input/output file pointers around the active path
 (`pointers`, `ensure_inputs_exist`, `allow_overwrite`, `allow_failed_entries`).
-- `EnsureActiveExists` — require each entry's active path to exist and be a
+- `EnsureActivesExist` — require each entry's active path to exist and be a
 file (`allow_failed_entries`). Place it in the chain when actives may be
 invented mid-staging; the default discovery path already yields real files.
 - `ResolveActiveReferences` / `ResolveParamReferences` — expand
@@ -326,8 +329,9 @@ workflow = DynamicProcessingWorkflow(
     pipeline_params={...},        # shared `steps` spec from section 1/3, or a list (one per active)
     staging_params={...},         # the stager from section 3 (optional)
     num_workers=1,                # serial by default; "auto" or N>1 for parallel cohort runs
+    staging_workers=1,            # serial staging; N>1 uses a thread pool
     logs_root="/data/logs",       # writes main.log, status.log, workers.log
-    timeout=1800,                 # soft per-entry limit (seconds)
+    timeout=1800,                 # hard per-entry execution limit (seconds)
 )
 
 # Phase 1 — plan only (collect active files + stage entries, no processing):
@@ -368,17 +372,29 @@ plan-only / from-plan / dry-run). The orchestrator returns nothing; persist with
 The CLI `dynamic_workflow` command uses that driver.
 - **Logging** is controlled by `logs_root` and the `main_logs` / `status_logs` /
 `worker_logs` / `dev_mode` flags. The status log records completion as
-`<active> | SUCCESS` or `... | FAILURE | <traceback>` (or
+`<active> | SUCCESS` or `... | FAILURE | <exception class: concise message>` (or
 `... | STAGING_FAILURE | <message>` when staging recorded errors on an entry).
-A configured `timeout` is a soft per-entry time limit. Exceeding it does not
-cancel the worker; `status.log` records `TIMEOUT` to mark the overrun.
-Completion is still `SUCCESS` or `FAILURE`. Retry from
-`status.log` using the last `SUCCESS` / `FAILURE` line per active.
+Full tracebacks are written to `main.log`, not `status.log`. Worker diagnostics
+are best-effort under extreme logging backpressure and may be dropped rather than
+blocking preprocessing; a suppression summary is written to the main diagnostic
+log. A finite `timeout` is measured from the worker-recorded execution start.
+Exceeding it records `TIMEOUT`, terminates and replaces the process pool, and
+requeues other affected entries. `timeout=None` applies no task execution timeout.
+Retry from `status.log` using each active's terminal status. Entries interrupted
+only because their pool failed or was replaced are not assigned a false terminal
+status and remain retryable.
 - **Parallelization** defaults to serial (`num_workers=1`). Set `num_workers` to
 `"auto"` (CPU count) or an integer `> 1` to run entries in a `ProcessPoolExecutor`.
+Process pools, queues, and shared timeout state use an explicit `spawn`
+multiprocessing context rather than implicit `fork`. A finite timeout also uses a
+single-worker process pool when `num_workers=1`, because a thread cannot enforce a
+hard timeout.
 For parallel cohort runs, also consider limiting per-process ITK/OMP threads to
-avoid oversubscription.
-- **RunPlan persistence**: `.duckdb` (recommended, scalable) or `.json` (debug).
+avoid oversubscription. Staging is independent: `staging_workers` (default `1`)
+uses a thread pool when `> 1`. Keep this modest on shared filesystems; it is not
+`"auto"` and should not track execution `num_workers`.
+- **RunPlan persistence**: `.duckdb` (recommended). `.json` remains supported
+until v0.5.0 but is deprecated.
 Reload with `RunPlan.load(path)` and execute without re-discovering or re-staging.
 - **Slicing large plans**: select a contiguous window of plan entry indices
 (including staging-failed entries) with `plan.slice(start, end)` / `plan[start:end]`,
@@ -509,7 +525,7 @@ niiflow-preproc/
     │   ├── stager_factory.py         # create_stager / discovery
     │   ├── search.py                 # parent_up / parent_match / mirror_root
     │   ├── dynamic_referencing.py    # {active.*} / {params...} reference resolution
-    │   ├── utility.py                # EnsureActiveExists and other utility stagers
+    │   ├── utility.py                # EnsureActivesExist and other utility stagers
     │   ├── validation.py
     │   └── types.py                  # Root/Input/Output spec types
     ├── pipelines/
@@ -531,12 +547,13 @@ niiflow-preproc/
     │       ├── utility.py            # Reorient / ToNumpy / GetImage / Rename / Delete / SyncMetadata
     │       └── pipelines.py          # ANTsPreprocessBrainImage
     ├── workflows/
-    │   ├── workflow.py               # ProcessingWorkflow / PlannableWorkflow (execution engine)
+    │   ├── workflow.py               # ProcessingWorkflow (execution engine)
+    │   ├── plannable_workflow.py     # PlannableWorkflow (plan / run_plan)
     │   ├── dynamic_workflow.py       # DynamicProcessingWorkflow / dynamic_workflow
     │   ├── workflow_factory.py       # create_workflow / discovery
     │   ├── mixins.py                 # SupportsInputDiscovery / SupportsStaging
     │   ├── types.py                  # InputData / SearchInput / FromFileInput
-    │   ├── plan.py                   # RunPlan (.duckdb / .json persistence)
+    │   ├── plan.py                   # RunPlan (.duckdb; .json deprecated)
     │   ├── logging_manager.py        # main / status / parallel logging
     │   └── logging_utils.py
     ├── functional/                   # array/image operations (core preprocessing functions)

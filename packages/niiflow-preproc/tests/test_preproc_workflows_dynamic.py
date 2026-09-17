@@ -20,6 +20,10 @@ from niiflow.preproc.workflows import (
     RunPlan,
     dynamic_workflow,
 )
+from niiflow.preproc.workflows.execution_state import (
+    ExecutionState,
+    ExecutionStatus,
+)
 from niiflow.preproc.workflows.mixins import SupportsInputDiscovery, SupportsStaging
 
 _dynamic_pipeline_mod = importlib.import_module(
@@ -144,6 +148,29 @@ class TestWorkflowPlannableContract:
     def test_supports_discovery_and_staging(self) -> None:
         assert issubclass(DynamicProcessingWorkflow, SupportsInputDiscovery)
         assert issubclass(DynamicProcessingWorkflow, SupportsStaging)
+
+
+class TestDynamicWorkflowStagingWorkers:
+    def test_defaults_to_one(self, tmp_path: Path) -> None:
+        wf = _workflow(logs_root=tmp_path / "logs")
+        assert wf._staging_workers == 1
+
+    @pytest.mark.parametrize("value", [1, 2, 16])
+    def test_accepts_positive_int(self, tmp_path: Path, value: int) -> None:
+        wf = _workflow(logs_root=tmp_path / "logs", staging_workers=value)
+        assert wf._staging_workers == value
+
+    @pytest.mark.parametrize("value", [0, -3])
+    def test_rejects_non_positive(self, tmp_path: Path, value: int) -> None:
+        with pytest.raises(ValueError, match="at least 1"):
+            _workflow(logs_root=tmp_path / "logs", staging_workers=value)
+
+    @pytest.mark.parametrize("value", ["auto", 1.5, None, True])
+    def test_rejects_invalid_type(self, tmp_path: Path, value: object) -> None:
+        with pytest.raises(ValueError, match="integer >= 1"):
+            _workflow(
+                logs_root=tmp_path / "logs", staging_workers=value
+            )  # type: ignore[arg-type]
 
 
 class TestDynamicWorkflowPlan:
@@ -730,6 +757,183 @@ class TestDynamicWorkflow:
         )
 
         assert called == [plan.entries[1].active, plan.entries[2].active]
+
+    def test_plan_then_execute_forwards_execution_state_options(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        file_path = tmp_path / "a.nii.gz"
+        file_path.write_bytes(b"")
+        state_path = tmp_path / "resume.duckdb"
+        save_state_path = tmp_path / "updated.duckdb"
+        loaded_state = object()
+        statuses = {ExecutionStatus.FAILURE, ExecutionStatus.TIMEOUT}
+        loaded_from: list[Path | str] = []
+        run_calls: list[tuple[RunPlan, dict[str, Any]]] = []
+
+        def _load(cls: type[ExecutionState], path: Path | str) -> object:
+            loaded_from.append(path)
+            return loaded_state
+
+        def _run_plan(
+            self: DynamicProcessingWorkflow,
+            plan: RunPlan,
+            **kwargs: Any,
+        ) -> object:
+            run_calls.append((plan, kwargs))
+            return loaded_state
+
+        monkeypatch.setattr(ExecutionState, "load", classmethod(_load))
+        monkeypatch.setattr(DynamicProcessingWorkflow, "run_plan", _run_plan)
+
+        dynamic_workflow(
+            settings=_driver_settings(),
+            inputs=file_path,
+            from_execution_state=state_path,
+            save_execution_state_to=save_state_path,
+            run_statuses=statuses,
+        )
+
+        assert loaded_from == [state_path]
+        assert len(run_calls) == 1
+        plan, kwargs = run_calls[0]
+        assert [entry.active for entry in plan.entries] == [file_path.resolve()]
+        assert kwargs == {
+            "start": 0,
+            "end": None,
+            "execution_state": loaded_state,
+            "save_execution_state_to": save_state_path,
+            "run_statuses": statuses,
+        }
+
+    def test_from_plan_forwards_execution_state_options(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        file_path = tmp_path / "a.nii.gz"
+        file_path.write_bytes(b"")
+        plan_path = tmp_path / "job.duckdb"
+        expected_plan = _workflow().plan(file_path, save_plan_to=plan_path)
+        state_path = tmp_path / "resume.duckdb"
+        save_state_path = tmp_path / "updated.duckdb"
+        loaded_state = object()
+        statuses = {ExecutionStatus.PENDING, ExecutionStatus.FAILURE}
+        loaded_from: list[Path | str] = []
+        run_calls: list[tuple[RunPlan, dict[str, Any]]] = []
+
+        def _load(cls: type[ExecutionState], path: Path | str) -> object:
+            loaded_from.append(path)
+            return loaded_state
+
+        def _run_plan(
+            self: DynamicProcessingWorkflow,
+            plan: RunPlan,
+            **kwargs: Any,
+        ) -> object:
+            run_calls.append((plan, kwargs))
+            return loaded_state
+
+        monkeypatch.setattr(ExecutionState, "load", classmethod(_load))
+        monkeypatch.setattr(DynamicProcessingWorkflow, "run_plan", _run_plan)
+
+        dynamic_workflow(
+            from_plan=plan_path,
+            from_execution_state=state_path,
+            save_execution_state_to=save_state_path,
+            run_statuses=statuses,
+        )
+
+        assert loaded_from == [state_path]
+        assert len(run_calls) == 1
+        plan, kwargs = run_calls[0]
+        assert plan.entries == expected_plan.entries
+        assert kwargs == {
+            "execution_state": loaded_state,
+            "save_execution_state_to": save_state_path,
+            "run_statuses": statuses,
+        }
+
+    @pytest.mark.parametrize("mode", ["dry_run", "plan_only", "from_plan_dry_run"])
+    def test_non_execution_modes_skip_execution_state_io(
+        self,
+        mode: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        file_path = tmp_path / "a.nii.gz"
+        file_path.write_bytes(b"")
+        plan_path = tmp_path / "job.duckdb"
+        if mode == "from_plan_dry_run":
+            _workflow().plan(file_path, save_plan_to=plan_path)
+
+        def _unexpected(*args: Any, **kwargs: Any) -> None:
+            pytest.fail("execution-state I/O or plan execution was attempted")
+
+        monkeypatch.setattr(ExecutionState, "load", classmethod(_unexpected))
+        monkeypatch.setattr(ExecutionState, "save", _unexpected)
+        monkeypatch.setattr(DynamicProcessingWorkflow, "run_plan", _unexpected)
+
+        state_options = {
+            "from_execution_state": tmp_path / "resume.duckdb",
+            "save_execution_state_to": tmp_path / "updated.duckdb",
+        }
+        if mode == "from_plan_dry_run":
+            dynamic_workflow(
+                from_plan=plan_path,
+                dry_run=True,
+                **state_options,  # type: ignore[arg-type]
+            )
+        else:
+            dynamic_workflow(
+                settings=_driver_settings(),
+                inputs=file_path,
+                dry_run=mode == "dry_run",
+                plan_only=mode == "plan_only",
+                **state_options,  # type: ignore[arg-type]
+            )
+
+    def test_from_plan_does_not_rewrite_retained_planning_outputs(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        file_path = tmp_path / "a.nii.gz"
+        file_path.write_bytes(b"")
+        plan_path = tmp_path / "source.duckdb"
+        _workflow().plan(file_path, save_plan_to=plan_path)
+        retained_plan_path = tmp_path / "retained.duckdb"
+        retained_filepaths_path = tmp_path / "retained.txt"
+        retained_plan_path.write_bytes(b"plan sentinel")
+        retained_filepaths_path.write_text("filepaths sentinel", encoding="utf-8")
+
+        monkeypatch.setattr(
+            DynamicProcessingWorkflow,
+            "run_plan",
+            lambda self, plan, **kwargs: None,
+        )
+
+        dynamic_workflow(
+            from_plan=plan_path,
+            save_plan_to=retained_plan_path,
+            save_filepaths_to=retained_filepaths_path,
+        )
+
+        assert retained_plan_path.read_bytes() == b"plan sentinel"
+        assert (
+            retained_filepaths_path.read_text(encoding="utf-8") == "filepaths sentinel"
+        )
+
+    def test_from_plan_rejects_plan_only(self, tmp_path: Path) -> None:
+        with pytest.raises(
+            ValueError,
+            match="`from_plan` cannot be combined with `plan_only`",
+        ):
+            dynamic_workflow(
+                from_plan=tmp_path / "job.duckdb",
+                plan_only=True,
+            )
 
     def test_plan_only_warns_and_ignores_start_end(
         self,

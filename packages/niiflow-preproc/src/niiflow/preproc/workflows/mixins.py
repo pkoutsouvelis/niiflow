@@ -33,25 +33,22 @@ from .types import InputData
 class SupportsInputDiscovery:
     """Collect active files that anchor each processing entry.
 
-    An active file is the canonical path for one unit of work — the file
-    that defines what is being processed. For example, a subject's T1w
-    structural MRI may serve as the active file for an entry whose pipeline
-    also locates FLAIR, a segmentation mask, and derivative outputs relative
-    to that anchor.
+    An active file is the canonical path for one unit of work (for example a
+    subject's T1w) around which companions and outputs are resolved.
 
-    :meth:`collect_active_files` accepts :data:`~niiflow.preproc.workflows.types.InputData`:
-    an explicit file path, a ``search`` / ``from_file`` mapping (see
-    :mod:`~niiflow.preproc.workflows.types`), or a sequence of those entries.
-    Each source has a corresponding public collector:
-    :meth:`collect_explicit_active_file`, :meth:`collect_active_files_from_file`,
-    and :meth:`search_active_files`. The facade may disable any of those modes
-    with ``allow_explicit`` / ``allow_from_file`` / ``allow_search``.
+    :meth:`collect_active_files` is the public entry point. It accepts
+    :data:`~niiflow.preproc.workflows.types.InputData` — an explicit path, a
+    ``search`` / ``from_file`` mapping, or a sequence of those — and may restrict
+    modes with ``allow_explicit`` / ``allow_from_file`` / ``allow_search``.
+    Paths are returned in discovery order with no deduplication.
 
-    Existence rules are per source: explicit ``Path`` / ``str`` inputs must
-    exist; ``search`` results exist by construction (roots must exist);
-    ``from_file`` existence is controlled per entry by optional ``strict``
-    (default ``True``), forwarded to
+    Existence rules are per source: explicit paths must exist as files; ``search``
+    hits exist by construction (roots must exist); ``from_file`` existence follows
+    optional ``strict`` (default ``True``) on
     :func:`~niiflow.preproc.data.read_paths_from_file`.
+
+    Requires :meth:`~niiflow.preproc.workflows.workflow.ProcessingWorkflow.log`
+    from the concrete workflow.
     """
 
     def collect_active_files(
@@ -75,7 +72,7 @@ class SupportsInputDiscovery:
             allow_search: Accept ``mode: search`` mappings.
 
         Returns:
-            Deduplicated absolute file paths, preserving first-seen order.
+            Absolute file paths in discovery order.
 
         Raises:
             FileNotFoundError: If an explicit path or search root does not exist.
@@ -89,8 +86,9 @@ class SupportsInputDiscovery:
         log = getattr(self, "log", None)
         if not callable(log):
             raise AttributeError(
-                f"{type(self).__name__} must inherit from ProcessingWorkflow; "
-                "SupportsInputDiscovery relies on its log() method."
+                f"SupportsInputDiscovery requires a callable log() method, but "
+                f"{type(self).__name__} has no attribute 'log'. "
+                "Combine with ProcessingWorkflow (or otherwise define log)."
             )
 
         for name, value in (
@@ -120,6 +118,7 @@ class SupportsInputDiscovery:
         if not items:
             raise ValueError("`inputs` must be non-empty")
 
+        log("Collecting active files...")
         found: list[Path] = []
         for item in items:
             if isinstance(item, (str, Path)):
@@ -127,7 +126,7 @@ class SupportsInputDiscovery:
                     raise ValueError(
                         "Explicit path inputs are not allowed (`allow_explicit=False`)"
                     )
-                found.append(self.collect_explicit_active_file(item))
+                found.append(self._collect_explicit_active_file(item))
                 continue
 
             if isinstance(item, dict):
@@ -138,7 +137,7 @@ class SupportsInputDiscovery:
                             "search inputs are not allowed (`allow_search=False`)"
                         )
                     found.extend(
-                        self.search_active_files(
+                        self._search_active_files(
                             item.get("roots"),  # type: ignore[arg-type]
                             item.get("explorer_params"),  # type: ignore[arg-type]
                         )
@@ -153,7 +152,7 @@ class SupportsInputDiscovery:
                     if path is None or not isinstance(path, (str, Path)):
                         raise ValueError("`from_file` input requires `path`")
                     found.extend(
-                        self.collect_active_files_from_file(
+                        self._collect_active_files_from_file(
                             path,
                             strict=item.get("strict", True),
                             skip_resolve_filepaths=item.get(
@@ -171,24 +170,23 @@ class SupportsInputDiscovery:
                 "expected a path or mapping"
             )
 
-        unique = list(dict.fromkeys(found))
-        if not unique:
+        if not found:
             raise RuntimeError(
                 "No active files were found. Check the run inputs and explorer "
                 "configuration."
             )
-        log(f"Found {len(unique)} unique active file path(s).")
+        log(f"Found {len(found)} active file path(s).")
 
         if save_to is not None:
             out = resolve_path(save_to)
             if get_ext(out) != ".txt":
                 raise ValueError(f"`save_to` must be a .txt path, got {out}")
-            write_txt("\n".join(str(path) for path in unique), out)
-            log(f"Wrote {len(unique)} active file path(s) to {out}.")
+            write_txt("\n".join(str(path) for path in found), out)
+            log(f"Wrote {len(found)} active file path(s) to {out}.")
 
-        return unique
+        return found
 
-    def collect_explicit_active_file(self, path: Path | str) -> Path:
+    def _collect_explicit_active_file(self, path: Path | str) -> Path:
         """Resolve one explicit active file path and require that it exists."""
         resolved = resolve_path(path)
         if not resolved.exists():
@@ -199,7 +197,7 @@ class SupportsInputDiscovery:
             )
         return resolved
 
-    def collect_active_files_from_file(
+    def _collect_active_files_from_file(
         self,
         path: Path | str,
         *,
@@ -209,29 +207,20 @@ class SupportsInputDiscovery:
         """Read active file paths from a ``.txt`` listing (one path per line)."""
         if not isinstance(path, (str, Path)):
             raise ValueError("`from_file` input requires `path`")
+        list_path = resolve_path(path)
+        self.log(f"Reading file paths from: {list_path}")  # type: ignore[attr-defined]
         return read_paths_from_file(
-            path,
+            list_path,
             strict=strict,
             skip_resolve_filepaths=skip_resolve_filepaths,
         )
 
-    def search_active_files(
+    def _search_active_files(
         self,
         roots: Path | str | Sequence[Path | str],
         explorer_params: NiftiFinderConfig,
     ) -> list[Path]:
-        """Search for active files under one or more roots with a FileFinder config.
-
-        ``explorer_params`` is a :class:`~niiflow.preproc.data.types.NiftiFinderConfig`
-        forwarded to :func:`~niiflow.preproc.data.get_data_explorer`.
-        """
-        log = getattr(self, "log", None)
-        if not callable(log):
-            raise AttributeError(
-                f"{type(self).__name__} must inherit from ProcessingWorkflow; "
-                "SupportsInputDiscovery relies on its log() method."
-            )
-
+        """Search for active files under one or more roots with a FileFinder config."""
         if roots is None:
             raise ValueError("`search` input requires `roots`")
         if not isinstance(explorer_params, dict):
@@ -266,9 +255,9 @@ class SupportsInputDiscovery:
                 raise FileNotFoundError(root_path)
             if not root_path.is_dir():
                 raise ValueError(f"Search root must be a directory, got {root_path}")
-            log(f"Extracting files using data explorer for {root_path}...")
+            self.log(f"Extracting files using data explorer for {root_path}...")  # type: ignore[attr-defined]
             result = explorer.list(root_path, sort=True, unique=True)
-            log(f"Found {len(result)} unique files under {root_path}.")
+            self.log(f"Found {len(result)} unique files under {root_path}.")  # type: ignore[attr-defined]
             found.extend(result)
         return found
 
@@ -294,27 +283,43 @@ class SupportsStaging:
     ``staging_params`` is ``None``), so ``{active.*}`` / leftover ``{params.*}``
     in ``entry_params`` are expanded consistently. Active existence is not
     enforced here; place
-    :class:`~niiflow.preproc.staging.EnsureActiveExists` in the chain when needed.
+    :class:`~niiflow.preproc.staging.EnsureActivesExist` in the chain when needed.
 
-    Intended for use as a mixin on :class:`~niiflow.preproc.workflows.workflow.PlannableWorkflow`
-    subclasses, which provide :meth:`~niiflow.preproc.workflows.workflow.PlannableWorkflow.log`.
+    ``staging_workers`` is the thread count used by :meth:`stage_active_files`
+    (default ``1``, serial).
+
+    Intended for use as a mixin on :class:`~niiflow.preproc.workflows.plannable_workflow.PlannableWorkflow`
+    subclasses, which provide :meth:`~niiflow.preproc.workflows.plannable_workflow.PlannableWorkflow.log`.
     """
 
     def configure_staging(
         self,
         staging_params: dict[str, Any] | Sequence[dict[str, Any]] | None = None,
         entry_params: dict[str, Any] | Sequence[dict[str, Any]] | None = None,
+        staging_workers: int = 1,
     ) -> None:
         """Configure staging-related parameters.
 
         To be used in the constructor of a
-        :class:`~niiflow.preproc.workflows.workflow.PlannableWorkflow` subclass.
+        :class:`~niiflow.preproc.workflows.plannable_workflow.PlannableWorkflow` subclass.
 
         Args:
             staging_params: Optional stager specs for
                 :func:`~niiflow.preproc.staging.create_stager`.
             entry_params: Params attached to each entry before stagers run.
+            staging_workers: Thread count for :meth:`stage_active_files`
+                (default ``1``, serial).
         """
+        if isinstance(staging_workers, bool) or not isinstance(staging_workers, int):
+            raise ValueError(
+                f"`staging_workers` must be an integer >= 1, got `{staging_workers}`"
+            )
+        if staging_workers < 1:
+            raise ValueError(
+                f"`staging_workers` must be at least 1, got `{staging_workers}`"
+            )
+        self._staging_workers = staging_workers
+
         if staging_params is None:
             user_stagers: list[Stager] = []
             self._staging_params: list[dict[str, Any]] = []
@@ -372,8 +377,8 @@ class SupportsStaging:
 
         Args:
             active_files: Absolute active file paths to stage.
-            save_to: Optional ``.duckdb`` / ``.json`` path where the staged plan is
-                written. ``None`` skips saving.
+            save_to: Optional ``.duckdb`` path where the staged plan is written
+                (``.json`` is deprecated until v0.5.0). ``None`` skips saving.
 
         Returns:
             A run plan containing one staged entry per active file.
@@ -381,14 +386,22 @@ class SupportsStaging:
         log = getattr(self, "log", None)
         if not callable(log):
             raise AttributeError(
-                f"{type(self).__name__} must inherit from ProcessingWorkflow; "
-                "SupportsStaging relies on its log() method."
+                f"SupportsStaging requires a callable log() method, but "
+                f"{type(self).__name__} has no attribute 'log'. "
+                "Combine with ProcessingWorkflow (or otherwise define log)."
             )
         log(f"Staging {len(active_files)} entries...")
         entries = make_entries(active_files, self._entry_params)
+        num_workers = self._staging_workers
         for stager in self._stagers:
-            log(f"Staging with {stager.__class__.__name__}...")
-            entries = stager.stage(entries)
+            if num_workers > 1:
+                log(
+                    f"Staging with {stager.__class__.__name__} "
+                    f"({num_workers} threads)..."
+                )
+            else:
+                log(f"Staging with {stager.__class__.__name__}...")
+            entries = stager.stage(entries, num_workers=num_workers)
         log(f"Staged {len(entries)} entries.")
 
         plan = RunPlan(entries=tuple(entries))

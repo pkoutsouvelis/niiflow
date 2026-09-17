@@ -8,6 +8,7 @@ import pytest
 
 from niiflow.preproc.staging import (
     EnsureActiveExists,
+    EnsureActivesExist,
     FileStager,
     ResolveActiveReferences,
     ResolveParamReferences,
@@ -120,9 +121,18 @@ class TestCreateStager:
             create_stager("ResolveParamReferences"), ResolveParamReferences
         )
 
-    def test_discover_includes_ensure_active_exists(self) -> None:
+    def test_discover_includes_ensure_actives_exist(self) -> None:
+        registry = discover_stager_classes()
+        assert "EnsureActivesExist" in registry
+        stager = create_stager("EnsureActivesExist", {"allow_failed_entries": True})
+        assert isinstance(stager, EnsureActivesExist)
+        assert stager.allow_failed_entries is True
+
+    def test_ensure_active_exists_alias_still_constructible(self) -> None:
         registry = discover_stager_classes()
         assert "EnsureActiveExists" in registry
-        stager = create_stager("EnsureActiveExists", {"allow_failed_entries": True})
+        with pytest.warns(DeprecationWarning, match="Use `EnsureActivesExist` instead"):
+            stager = create_stager("EnsureActiveExists", {"allow_failed_entries": True})
         assert isinstance(stager, EnsureActiveExists)
+        assert isinstance(stager, EnsureActivesExist)
         assert stager.allow_failed_entries is True

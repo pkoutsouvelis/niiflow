@@ -17,17 +17,28 @@ from ants.core import ANTsImage
 
 from niiflow.preproc.functional.array import arithmetic as _array_arithmetic
 
+from .metadata import sync_ants_metadata
 from .utils import ants_to_numpy_with_metadata, numpy_to_ants_with_metadata
 
 
 def _resolve_operation(
     operation: Mapping[str, Any] | Any,
+    *,
+    reference: ANTsImage,
+    index: int,
 ) -> Mapping[str, Any] | Any:
     """Convert ANTsImage operands to numpy; leave other operations unchanged."""
     if not isinstance(operation, Mapping) or len(operation) != 1:
         return operation
     ((key, value),) = operation.items()
     if isinstance(value, ANTsImage):
+        try:
+            sync_ants_metadata(value, reference)
+        except ValueError as e:
+            raise ValueError(
+                f"ANTsImage operand for {key!r} at operation index {index} "
+                f"must share a voxel grid with `input`: {e}"
+            ) from e
         return {key: value.numpy()}
     return operation
 
@@ -50,9 +61,11 @@ def pointwise_arithmetic(
     * ``{"sub": value}`` → ``out = out - value``
 
     ``value`` may be a scalar, a :class:`numpy.ndarray`, or an
-    :class:`~ants.core.ANTsImage` compatible with `input` under ordinary NumPy
-    broadcasting. Image operands are converted to arrays before the operation;
-    scalars and arrays are forwarded as-is.
+    :class:`~ants.core.ANTsImage`. Image operands must share a voxel grid with
+    `input` (shape, origin, spacing, and direction within the tolerances of
+    :func:`~niiflow.preproc.functional.image.metadata.sync_ants_metadata`);
+    they are converted to arrays before the operation. Scalars and arrays are
+    forwarded as-is and must be broadcast-compatible with `input`.
 
     Args:
         input:
@@ -67,11 +80,15 @@ def pointwise_arithmetic(
     Raises:
         ValueError: If `input` is invalid, no operations are provided, an
             operation is not a single-key mapping, an operation key is not one
-            of ``"mul"``, ``"add"``, ``"div"``, or ``"sub"``, an operand cannot
+            of ``"mul"``, ``"add"``, ``"div"``, or ``"sub"``, an ANTsImage
+            operand is not on the same voxel grid as `input`, an operand cannot
             be broadcast with the running array, or the result shape differs
             from `input`.
     """
     image_array, metadata = ants_to_numpy_with_metadata(input)
-    resolved = tuple(_resolve_operation(operation) for operation in operations)
+    resolved = tuple(
+        _resolve_operation(operation, reference=input, index=index)
+        for index, operation in enumerate(operations)
+    )
     out_array = _array_arithmetic.pointwise_arithmetic(image_array, *resolved)
     return numpy_to_ants_with_metadata(out_array, metadata)

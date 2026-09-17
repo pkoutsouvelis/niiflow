@@ -8,6 +8,7 @@ __all__ = [
 
 from copy import deepcopy
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from niiflow.preproc.data.explorer_factory import get_data_explorer
@@ -60,8 +61,8 @@ class FileStager(Stager):
 
     Pointers are a construction-time map from dotted ``params`` paths to
     ``"input"`` or ``"output"``. Declared paths are resolved into concrete file
-    locations (search / path join / existence checks). ``None`` or ``{}`` means
-    no file pointers.
+    locations (search / ``root`` + ``name`` / path join / existence checks).
+    ``None`` or ``{}`` means no file pointers.
 
     Dynamic references (``{active.*}``, ``{params.*}``) are a separate concern.
     Prefer running :class:`~niiflow.preproc.staging.dynamic_referencing.ResolveActiveReferences`
@@ -109,6 +110,7 @@ class FileStager(Stager):
         self.allow_failed_entries = bool(allow_failed_entries)
 
         self._explorer_cache: dict[tuple[Any, ...], Any] = {}
+        self._explorer_lock = Lock()
 
     def stage_single(self, entry: StagedEntry, *, index: int = 0) -> StagedEntry:
         """Stage one entry while preserving its
@@ -159,7 +161,10 @@ class FileStager(Stager):
                 set_by_dotted_path(out_params, pointer, resolved)
 
             return StagedEntry(
-                active=entry.active, params=out_params, errors=entry.errors
+                active=entry.active,
+                id=entry.id,
+                params=out_params,
+                errors=entry.errors,
             )
 
         except FileStagingError:
@@ -286,7 +291,12 @@ class FileStager(Stager):
         pointer: str | None = None,
     ) -> Path | list[Path]:
         """Resolve an :data:`~niiflow.preproc.staging.types.InputSpec` to one or more
-        files."""
+        files.
+
+        Mapping specs must define exactly one of ``search`` or ``name``. ``search``
+        locates files under ``root`` with an explorer. ``name`` joins ``root / name``,
+        the same shape as an output pointer.
+        """
         if spec is None:
             return ensure_file(ctx.active, must_exist=self.ensure_inputs_exist)
 
@@ -298,9 +308,35 @@ class FileStager(Stager):
 
         input_spec = require_mapping(spec, "Input spec")
         check_allowed_keys(
-            input_spec, {"root", "search", "resolve_results"}, "Input spec"
+            input_spec, {"root", "search", "name", "resolve_results"}, "Input spec"
         )
-        require_keys(input_spec, ["search"], "Input spec")
+        has_search = "search" in input_spec
+        has_name = "name" in input_spec
+        if has_search == has_name:
+            raise ValueError(
+                "Input spec must define exactly one of 'search' or 'name'."
+            )
+        if has_name and "resolve_results" in input_spec:
+            raise ValueError(
+                "Input spec 'resolve_results' is only valid with 'search'."
+            )
+
+        if has_name:
+            root_spec = input_spec.get("root")
+            if isinstance(root_spec, list):
+                raise TypeError(
+                    "Input spec root cannot be a list when using 'name'; "
+                    "name-based inputs require one root."
+                )
+            name = input_spec["name"]
+            if not isinstance(name, str):
+                raise TypeError(
+                    f"Input spec 'name' must be a string, got {type(name).__name__}."
+                )
+            root = self.get_root(
+                root_spec, ctx=ctx, must_exist=self.ensure_inputs_exist
+            )
+            return ensure_file(root / name, must_exist=self.ensure_inputs_exist)
 
         roots = self.get_roots(input_spec.get("root"), ctx=ctx, must_exist=True)
         search_spec = require_mapping(input_spec["search"], "Input spec 'search'")
@@ -321,9 +357,10 @@ class FileStager(Stager):
         key = explorer_cache_key(search_spec)
         if key is None:
             return get_data_explorer(**search_spec)
-        if key not in self._explorer_cache:
-            self._explorer_cache[key] = get_data_explorer(**search_spec)
-        return self._explorer_cache[key]
+        with self._explorer_lock:
+            if key not in self._explorer_cache:
+                self._explorer_cache[key] = get_data_explorer(**search_spec)
+            return self._explorer_cache[key]
 
     @staticmethod
     def _anchor_to_active(path: str | Path, *, ctx: StagingContext) -> Path:

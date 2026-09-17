@@ -31,6 +31,7 @@ def test_create_workflow_forwards_kwargs(tmp_path: Path) -> None:
         "DynamicProcessingWorkflow",
         {
             "num_workers": 3,
+            "staging_workers": 5,
             "timeout": 12.5,
             "logs_root": tmp_path / "logs",
             "staging_params": {
@@ -45,6 +46,7 @@ def test_create_workflow_forwards_kwargs(tmp_path: Path) -> None:
     # Non-default values prove the kwargs reached the constructor rather than
     # falling back to defaults.
     assert wf.num_workers == 3
+    assert wf._staging_workers == 5
     assert wf.timeout == 12.5
 
     assert len(wf._stagers) == 3

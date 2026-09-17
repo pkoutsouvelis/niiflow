@@ -36,14 +36,30 @@ RootSpec: TypeAlias = SingleRootSpec | list[SingleRootSpec]
 
 
 class InputSearchSpec(TypedDict, total=False):
-    """Input file search specification."""
+    """Input file search specification.
+
+    Locate files under ``root`` with an explorer. ``root`` is optional and defaults to
+    the active file's parent. Mutually exclusive with :class:`InputNameSpec`.
+    """
 
     root: RootSpec
     search: Required[dict[str, Any]]
     resolve_results: NotRequired[ResolveResults]
 
 
-InputSpec: TypeAlias = InputSearchSpec | str | Path | None
+class InputNameSpec(TypedDict, total=False):
+    """Input file path-construction specification.
+
+    Join ``root`` with ``name``, the same shape as an output pointer. ``root`` is
+    optional and defaults to the active file's parent. Mutually exclusive with
+    :class:`InputSearchSpec`.
+    """
+
+    root: RootSpec
+    name: Required[str]
+
+
+InputSpec: TypeAlias = InputSearchSpec | InputNameSpec | str | Path | None
 
 
 class OutputSearchSpec(TypedDict, total=False):

@@ -11,10 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 import logging
 from logging.handlers import QueueListener
-from multiprocessing import Queue
+import multiprocessing
+from multiprocessing.context import BaseContext
+import queue as queue_module
+import time
 import warnings
 
 from niiflow.preproc.utils.file import resolve_path
@@ -23,6 +26,9 @@ from niiflow.preproc.workflows.logging_utils import (
     ColorFilenameFormatter,
     SafeFieldFilter,
 )
+
+LOG_QUEUE_MAXSIZE = 10_000
+LISTENER_STOP_TIMEOUT = 5.0
 
 
 class FlushingHandler(logging.Handler):
@@ -37,7 +43,47 @@ class FlushingHandler(logging.Handler):
         self._handler.flush()
 
 
-@dataclass(frozen=True)
+class BoundedQueueListener(QueueListener):
+    """Queue listener whose shutdown cannot wait forever for a full queue."""
+
+    def __init__(self, queue: Any, *handlers: logging.Handler) -> None:
+        super().__init__(queue, *handlers)
+        self.stopped_cleanly = False
+
+    def stop(self, timeout: float = LISTENER_STOP_TIMEOUT) -> None:
+        """Request listener shutdown and wait at most ``timeout`` seconds."""
+        thread = self._thread
+        if thread is None:
+            self.stopped_cleanly = True
+            return
+
+        deadline = time.monotonic() + timeout
+        enqueued = False
+        while thread.is_alive():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                self.queue.put(  # type: ignore[attr-defined]
+                    self._sentinel,  # type: ignore[attr-defined]
+                    block=True,
+                    timeout=min(0.1, remaining),
+                )
+                enqueued = True
+                break
+            except queue_module.Full:
+                continue
+            except (OSError, EOFError, ValueError):
+                break
+
+        if enqueued:
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        self.stopped_cleanly = not thread.is_alive()
+        if self.stopped_cleanly:
+            self._thread = None
+
+
+@dataclass
 class ParallelLogging:
     """Bundle returned by :meth:`LoggingManager.setup_parallel_logging`.
 
@@ -46,18 +92,62 @@ class ParallelLogging:
     exceptions).
     """
 
-    queue: Queue
-    listener: QueueListener
+    queue: Any
+    listener: BoundedQueueListener
     worker_init_fn: Callable[[], None]
+    mp_context: BaseContext
+    suppressed_count: Any
+    diagnostic_logger: logging.Logger
+    _stopped: bool = False
 
     def stop(self) -> None:
-        """Flush remaining records and join the listener thread."""
-        self.listener.stop()
-        for handler in self.listener.handlers:
-            target = (
-                handler._handler if isinstance(handler, FlushingHandler) else handler
+        """Stop, flush, and release all parallel-logging resources once."""
+        if self._stopped:
+            return
+        self._stopped = True
+
+        listener_stopped = False
+        try:
+            self.listener.stop()
+            listener_stopped = self.listener.stopped_cleanly
+            if not listener_stopped:
+                self.diagnostic_logger.warning(
+                    "Worker log listener did not stop within %.1fs; "
+                    "abandoning queued records",
+                    LISTENER_STOP_TIMEOUT,
+                )
+        except Exception:
+            self.diagnostic_logger.exception("Failed to stop worker log listener")
+
+        try:
+            suppressed = int(self.suppressed_count.value)
+        except Exception:
+            suppressed = 0
+        if suppressed:
+            self.diagnostic_logger.warning(
+                "%d worker log records suppressed due to logging backpressure",
+                suppressed,
             )
-            target.flush()
+
+        if listener_stopped:
+            for handler in self.listener.handlers:
+                target = (
+                    handler._handler
+                    if isinstance(handler, FlushingHandler)
+                    else handler
+                )
+                try:
+                    target.flush()
+                finally:
+                    target.close()
+
+        try:
+            self.queue.close()
+        finally:
+            if listener_stopped:
+                self.queue.join_thread()
+            else:
+                self.queue.cancel_join_thread()
 
     def __enter__(self) -> ParallelLogging:
         return self
@@ -72,8 +162,8 @@ class LoggingManager:
     Holds logging *settings* (paths, flags) and exposes two factory methods:
 
     * :meth:`setup_main_logging` — returns a configured ``Logger``.
-    * :meth:`setup_status_logging` — returns a ``Logger`` for per-file
-      outcome tracking (SUCCESS / WARNING / FAILURE + traceback).
+    * :meth:`setup_status_logging` — returns a ``Logger`` for compact per-file
+      outcome tracking (SUCCESS / WARNING / FAILURE).
     * :meth:`setup_parallel_logging` — returns a :class:`ParallelLogging`
       context manager that bundles the queue, listener, and worker init fn.
 
@@ -93,6 +183,9 @@ class LoggingManager:
             Whether to write status logs to file or console.
         dev_mode(bool):
             Whether to enable debug mode.
+        mp_context(BaseContext | None):
+            Multiprocessing context to use for the parallel logging. If None, the
+            default context (spawn) will be used.
     """
 
     def __init__(
@@ -102,6 +195,7 @@ class LoggingManager:
         status_logs: bool,
         worker_logs: bool,
         dev_mode: bool,
+        mp_context: BaseContext | None = None,
     ) -> None:
         if logs_root is not None:
             logs_root = resolve_path(logs_root)
@@ -129,6 +223,16 @@ class LoggingManager:
         self._status_logs = status_logs
         self._worker_logs = worker_logs
         self._dev_mode = dev_mode
+        self._mp_context = (
+            mp_context
+            if mp_context is not None
+            else multiprocessing.get_context("spawn")
+        )
+
+    @property
+    def mp_context(self) -> BaseContext:
+        """Multiprocessing context shared by queues, managers, and workers."""
+        return self._mp_context
 
     def setup_main_logging(self) -> logging.Logger:
         """Build and return the main-process logger.
@@ -169,12 +273,12 @@ class LoggingManager:
         set, to ``logs_root/status.log``::
 
             sub-01_T1w.nii.gz | SUCCESS
-            sub-02_T1w.nii.gz | FAILURE | RuntimeError: boom\\n  traceback...
+            sub-02_T1w.nii.gz | FAILURE | RuntimeError: boom
 
         Every record is logged at INFO level; the outcome tag
         (SUCCESS / WARNING / FAILURE) is part of the message, not the log
-        level.  The logger is main-process-only (single writer, no
-        concurrency concerns).
+        level. Full tracebacks belong in the diagnostic log. The logger is
+        main-process-only (single writer, no concurrency concerns).
         """
         logger = logging.getLogger("niiflow.status")
         logger.setLevel(logging.DEBUG if self._dev_mode else logging.INFO)
@@ -200,13 +304,18 @@ class LoggingManager:
             with mgr.setup_parallel_logging() as parallel:
                 with ProcessPoolExecutor(
                     max_workers=n,
+                    mp_context=parallel.mp_context,
                     initializer=parallel.worker_init_fn,
                 ) as pool:
                     ...
 
-        The listener is already started when this method returns.
+        The listener is already started when this method returns. Its queue is
+        bounded so slow diagnostic storage cannot create unbounded worker backlog.
         """
-        queue: Queue = Queue()
+        queue = self._mp_context.Queue(maxsize=LOG_QUEUE_MAXSIZE)
+        # A lock-free shared counter cannot delay workers. Concurrent increments may
+        # under-count slightly, which is acceptable for a diagnostic summary.
+        suppressed_count = self._mp_context.Value("L", 0, lock=False)
 
         handlers: list[logging.Handler] = [logging.StreamHandler()]
         if self._worker_logs and self._logs_root:
@@ -241,7 +350,7 @@ class LoggingManager:
                 # Flush console only; per-record flush on GPFS files stalls workers.
                 listener_handlers.append(FlushingHandler(handler))
 
-        listener = QueueListener(queue, *listener_handlers)
+        listener = BoundedQueueListener(queue, *listener_handlers)
         listener.start()
 
         init_fn = partial(
@@ -249,10 +358,14 @@ class LoggingManager:
             log_queue=queue,
             dev_mode=self._dev_mode,
             worker_logs=self._worker_logs,
+            suppressed_count=suppressed_count,
         )
 
         return ParallelLogging(
             queue=queue,
             listener=listener,
             worker_init_fn=init_fn,
+            mp_context=self._mp_context,
+            suppressed_count=suppressed_count,
+            diagnostic_logger=logging.getLogger("niiflow.main"),
         )

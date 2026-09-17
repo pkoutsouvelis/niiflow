@@ -16,5 +16,6 @@ __all__ = [
 from .dynamic_workflow import DynamicProcessingWorkflow, dynamic_workflow
 from .plan import RunPlan
 from .mixins import SupportsInputDiscovery, InputData, SupportsStaging
-from .workflow import PlannableWorkflow, ProcessingWorkflow
+from .plannable_workflow import PlannableWorkflow
+from .workflow import ProcessingWorkflow
 from .workflow_factory import create_workflow, discover_workflow_classes

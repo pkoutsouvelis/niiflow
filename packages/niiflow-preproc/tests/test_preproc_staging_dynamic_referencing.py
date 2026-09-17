@@ -25,8 +25,11 @@ from niiflow.preproc.staging import (
     StagingContext,
     add_reference_staging_bookends,
     get_modifiers,
+    lstrip,
     make_entries,
+    replace,
     resolve_dynamic_refs,
+    rstrip,
     strip,
 )
 
@@ -159,7 +162,7 @@ class TestParamsObjectAttributes:
             == "sub-01_T1w_bet.nii"
         )
         assert (
-            _resolve("{params.mask.name|strip:.nii.gz}", active=active, params=params)
+            _resolve("{params.mask.name|rstrip:.nii.gz}", active=active, params=params)
             == "sub-01_T1w_bet"
         )
 
@@ -208,32 +211,59 @@ class TestParamsObjectAttributes:
 
 
 class TestModifiers:
-    def test_strip_on_str_and_path(self, tmp_path: Path) -> None:
-        assert strip("sub-01_bet", arg="_bet", ref="x") == "sub-01"
+    def test_rstrip_on_str_and_path(self, tmp_path: Path) -> None:
+        assert rstrip("sub-01_bet", "_bet", ref="x") == "sub-01"
         path = tmp_path / "sub-01_bet.nii.gz"
-        assert strip(path, arg="_bet.nii.gz", ref="x") == str(tmp_path / "sub-01")
+        assert rstrip(path, "_bet.nii.gz", ref="x") == str(tmp_path / "sub-01")
 
-    def test_strip_rejects_non_str_path(self) -> None:
+    def test_rstrip_rejects_non_str_path(self) -> None:
         with pytest.raises(ValueError, match="requires str or Path"):
-            strip(3, arg="_x", ref="params.count|strip:_x")
+            rstrip(3, "_x", ref="params.count|rstrip:_x")
 
-    def test_strip_rejects_empty_arg(self) -> None:
-        with pytest.raises(ValueError, match="Empty strip suffix"):
-            strip("abc", arg="", ref="x|strip:")
+    def test_rstrip_rejects_wrong_arity(self) -> None:
+        with pytest.raises(TypeError):
+            rstrip("abc", ref="x|rstrip")  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            rstrip("abc", "_a", "_b", ref="x|rstrip:_a,_b")  # type: ignore[arg-type]
 
-    def test_strip_via_resolve(self, tmp_path: Path) -> None:
+    def test_rstrip_wrong_arity_via_resolve(self, tmp_path: Path) -> None:
+        active = tmp_path / "a.nii.gz"
+        active.write_bytes(b"x")
+        with pytest.raises(DynamicReferenceError, match="Invalid arguments"):
+            _resolve("{active.name|rstrip}", active=active)
+        with pytest.raises(DynamicReferenceError, match="Invalid arguments"):
+            _resolve("{active.name|rstrip:_a,_b}", active=active)
+
+    def test_rstrip_rejects_empty_arg(self) -> None:
+        with pytest.raises(ValueError, match="Empty rstrip suffix"):
+            rstrip("abc", "", ref="x|rstrip:")
+
+    def test_rstrip_via_resolve(self, tmp_path: Path) -> None:
         active = tmp_path / "sub-01_T1w_bet.nii.gz"
         active.write_bytes(b"x")
         assert (
-            _resolve("{active.name|strip:_bet.nii.gz}", active=active) == "sub-01_T1w"
+            _resolve("{active.name|rstrip:_bet.nii.gz}", active=active) == "sub-01_T1w"
         )
 
-    def test_strip_on_non_path_attr_raises(self, tmp_path: Path) -> None:
+    def test_rstrip_on_non_path_attr_raises(self, tmp_path: Path) -> None:
         active = tmp_path / "a.nii.gz"
         active.write_bytes(b"x")
         params = {"image": _FakeImage(spacing=(1.0, 1.0, 1.0))}
         with pytest.raises(DynamicReferenceError, match="requires str or Path"):
-            _resolve("{params.image.spacing|strip:_x}", active=active, params=params)
+            _resolve("{params.image.spacing|rstrip:_x}", active=active, params=params)
+
+    def test_strip_is_deprecated_alias_of_rstrip(self) -> None:
+        with pytest.warns(DeprecationWarning, match="removed in v0.5.0"):
+            assert strip("sub-01_bet", "_bet", ref="x") == "sub-01"
+
+    def test_strip_via_resolve_warns(self, tmp_path: Path) -> None:
+        active = tmp_path / "sub-01_T1w_bet.nii.gz"
+        active.write_bytes(b"x")
+        with pytest.warns(DeprecationWarning, match="Use `rstrip` instead"):
+            assert (
+                _resolve("{active.name|strip:_bet.nii.gz}", active=active)
+                == "sub-01_T1w"
+            )
 
     def test_unknown_modifier_raises(self, tmp_path: Path) -> None:
         active = tmp_path / "a.nii.gz"
@@ -245,7 +275,61 @@ class TestModifiers:
 
     def test_get_modifiers_discovers_registered_callables(self) -> None:
         modifiers = get_modifiers()
-        assert modifiers == {"strip": strip}
+        assert modifiers == {
+            "lstrip": lstrip,
+            "replace": replace,
+            "rstrip": rstrip,
+            "strip": strip,
+        }
+
+    def test_lstrip_on_str_and_path(self, tmp_path: Path) -> None:
+        assert lstrip("pre_sub-01", "pre_", ref="x") == "sub-01"
+        path = tmp_path / "sub-01.nii.gz"
+        assert lstrip(path, str(tmp_path) + "/", ref="x") == "sub-01.nii.gz"
+
+    def test_lstrip_rejects_empty_arg(self) -> None:
+        with pytest.raises(ValueError, match="Empty lstrip prefix"):
+            lstrip("abc", "", ref="x|lstrip:")
+
+    def test_lstrip_via_resolve(self, tmp_path: Path) -> None:
+        active = tmp_path / "sub-01_T1w.nii.gz"
+        active.write_bytes(b"x")
+        assert _resolve("{active.name|lstrip:sub-01_}", active=active) == "T1w.nii.gz"
+
+    def test_replace_on_str(self) -> None:
+        assert replace("sub-01_T1w.nii.gz", "_T1w", "_FLAIR", ref="x") == (
+            "sub-01_FLAIR.nii.gz"
+        )
+
+    def test_replace_allows_empty_new(self) -> None:
+        assert replace("sub-01_bet.nii.gz", "_bet", "", ref="x") == "sub-01.nii.gz"
+
+    def test_replace_rejects_wrong_arity(self) -> None:
+        with pytest.raises(TypeError):
+            replace("abc", "foo", ref="x|replace:foo")  # type: ignore[arg-type]
+
+    def test_replace_wrong_arity_via_resolve(self, tmp_path: Path) -> None:
+        active = tmp_path / "a.nii.gz"
+        active.write_bytes(b"x")
+        with pytest.raises(DynamicReferenceError, match="Invalid arguments"):
+            _resolve("{active.name|replace:_T1w}", active=active)
+
+    def test_replace_rejects_empty_old(self) -> None:
+        with pytest.raises(ValueError, match="Empty replace pattern"):
+            replace("abc", "", "new", ref="x|replace:,new")
+
+    def test_replace_via_resolve(self, tmp_path: Path) -> None:
+        active = tmp_path / "sub-01_T1w.nii.gz"
+        active.write_bytes(b"x")
+        assert (
+            _resolve("{active.name|replace:_T1w,_FLAIR}", active=active)
+            == "sub-01_FLAIR.nii.gz"
+        )
+
+    def test_replace_via_resolve_allows_empty_new(self, tmp_path: Path) -> None:
+        active = tmp_path / "sub-01_bet.nii.gz"
+        active.write_bytes(b"x")
+        assert _resolve("{active.name|replace:_bet,}", active=active) == "sub-01.nii.gz"
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +346,7 @@ class TestReferenceStagers:
         )[0]
         staged = ResolveActiveReferences().stage([entry])[0]
         stem = active.stem
+        assert staged.id == entry.id
         assert staged.params["subject"] == stem
         assert staged.params["other"] == "{params.missing}"
 
@@ -282,6 +367,7 @@ class TestReferenceStagers:
             {"label": "rest", "out": "{params.label}_x"},
         )[0]
         staged = ResolveParamReferences().stage([entry])[0]
+        assert staged.id == entry.id
         assert staged.params["out"] == "rest_x"
 
     def test_bookends_around_file_stager(self, tmp_path: Path) -> None:
@@ -298,6 +384,7 @@ class TestReferenceStagers:
         )[0]
         staged = _stage(stager, [entry])[0]
         stem = active.stem
+        assert staged.id == entry.id
         assert staged.params["note"] == stem
         assert staged.params["output"] == active.parent / f"{stem}_out.nii.gz"
 
@@ -343,7 +430,6 @@ class TestReferenceStagers:
 
 
 class TestDynamicReferences:
-
     def test_stages_dynamic_references_without_pointers(
         self, bids_tree: dict[str, Path]
     ) -> None:
@@ -408,7 +494,7 @@ class TestDynamicReferences:
             {
                 "mask": str(mask),
                 "output": {
-                    "name": "{params.mask.name|strip:.nii.gz}_applied.nii.gz",
+                    "name": "{params.mask.name|rstrip:.nii.gz}_applied.nii.gz",
                 },
             },
         )[0]
@@ -538,7 +624,7 @@ class TestDynamicReferences:
             [active],
             {
                 "output": {
-                    "name": "{active.name|strip:_bet.nii.gz}_denoised.nii.gz",
+                    "name": "{active.name|rstrip:_bet.nii.gz}_denoised.nii.gz",
                 }
             },
         )[0]
@@ -556,7 +642,7 @@ class TestDynamicReferences:
             {
                 "mask": str(mask),
                 "output": {
-                    "name": "{params.mask.name|strip:_bet.nii.gz}_applied.nii.gz",
+                    "name": "{params.mask.name|rstrip:_bet.nii.gz}_applied.nii.gz",
                 },
             },
         )[0]
@@ -574,7 +660,7 @@ class TestDynamicReferences:
         stager = FileStager({"output": "output"})
         entry = make_entries(
             [active],
-            {"output": "outputs/{active.name|strip:_bet.nii.gz}_denoised.nii.gz"},
+            {"output": "outputs/{active.name|rstrip:_bet.nii.gz}_denoised.nii.gz"},
         )[0]
         staged = _stage(stager, [entry])[0]
 

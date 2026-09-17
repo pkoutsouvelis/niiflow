@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import warnings
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
+import duckdb
 import pytest
 
 from niiflow.preproc.staging import StagedEntry, StagingErrorRecord
@@ -16,10 +20,13 @@ def _entry(
     *,
     params: dict[str, Any] | None = None,
     errors: tuple[StagingErrorRecord, ...] = (),
+    entry_id: str | None = None,
 ) -> StagedEntry:
+    resolved = active.resolve()
     return StagedEntry(
-        active=active.resolve(),
+        active=resolved,
         params=params or {"steps": []},
+        id=entry_id if entry_id is not None else resolved.name,
         errors=errors,
     )
 
@@ -29,6 +36,7 @@ def _sample_plan(tmp_path: Path) -> RunPlan:
         entries=(
             _entry(
                 tmp_path / "sub-01_T1w.nii.gz",
+                entry_id="primary-t1w",
                 params={
                     "steps": [],
                     "output_path": str(tmp_path / "out" / "result.txt"),
@@ -37,11 +45,13 @@ def _sample_plan(tmp_path: Path) -> RunPlan:
             ),
             _entry(
                 tmp_path / "sub-02_T1w.nii.gz",
+                entry_id="failed-t1w",
                 errors=(
                     StagingErrorRecord(
                         active=tmp_path / "sub-02_T1w.nii.gz",
                         message="missing pointer target",
                         stage="FileStager",
+                        entry_id="failed-t1w",
                         entry_index=1,
                         error_type="FileStagingError",
                     ),
@@ -51,17 +61,173 @@ def _sample_plan(tmp_path: Path) -> RunPlan:
     )
 
 
+def _json_plan_warning(suffix: str):
+    if suffix == ".json":
+        return pytest.warns(
+            DeprecationWarning, match=r"deprecated and will be removed in v0\.5\.0"
+        )
+    return nullcontext()
+
+
+def _persisted_plan_version(path: Path) -> int:
+    if path.suffix == ".json":
+        return int(json.loads(path.read_text(encoding="utf-8"))["plan_version"])
+
+    conn = duckdb.connect(str(path), read_only=True)
+    try:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'plan_version'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    return int(row[0])
+
+
+def _write_plan_fixture(
+    path: Path,
+    *,
+    version: int | str | None,
+    records: list[dict[str, Any]],
+    include_ids: bool,
+) -> None:
+    if path.suffix == ".json":
+        payload: dict[str, Any] = {"entries": records}
+        if version is not None:
+            payload["plan_version"] = version
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return
+
+    conn = duckdb.connect(str(path))
+    try:
+        conn.execute("CREATE TABLE meta (key VARCHAR PRIMARY KEY, value VARCHAR)")
+        if version is not None:
+            conn.execute(
+                "INSERT INTO meta VALUES ('plan_version', ?)",
+                [str(version)],
+            )
+        if include_ids:
+            conn.execute("""CREATE TABLE entries (
+                    entry_index INTEGER PRIMARY KEY,
+                    id VARCHAR,
+                    active VARCHAR NOT NULL,
+                    params VARCHAR NOT NULL,
+                    errors VARCHAR NOT NULL
+                )""")
+            rows = [
+                (
+                    record["entry_index"],
+                    record.get("id"),
+                    record["active"],
+                    json.dumps(record["params"]),
+                    json.dumps(record["errors"]),
+                )
+                for record in records
+            ]
+            if rows:
+                conn.executemany(
+                    "INSERT INTO entries VALUES (?, ?, ?, ?, ?)",
+                    rows,
+                )
+        else:
+            conn.execute("""CREATE TABLE entries (
+                    entry_index INTEGER PRIMARY KEY,
+                    active VARCHAR NOT NULL,
+                    params VARCHAR NOT NULL,
+                    errors VARCHAR NOT NULL
+                )""")
+            rows = [
+                (
+                    record["entry_index"],
+                    record["active"],
+                    json.dumps(record["params"]),
+                    json.dumps(record["errors"]),
+                )
+                for record in records
+            ]
+            if rows:
+                conn.executemany(
+                    "INSERT INTO entries VALUES (?, ?, ?, ?)",
+                    rows,
+                )
+    finally:
+        conn.close()
+
+
+LegacyPlanFixture = tuple[Path, tuple[Path, ...], tuple[str, ...]]
+
+
+@pytest.fixture(params=[".duckdb", ".json"], ids=["duckdb", "json"])
+def v1_plan_fixture(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+) -> LegacyPlanFixture:
+    duplicate = (tmp_path / "duplicate.nii.gz").resolve()
+    suffix_collision = Path(f"{duplicate}#2")
+    actives = (duplicate, duplicate, suffix_collision, duplicate)
+    records = [
+        {
+            "entry_index": index,
+            "active": str(active),
+            "params": {"steps": [], "ordinal": index},
+            "errors": [],
+        }
+        for index, active in enumerate(actives)
+    ]
+    path = tmp_path / f"v1-plan{request.param}"
+    _write_plan_fixture(
+        path,
+        version=1,
+        records=records,
+        include_ids=False,
+    )
+    expected_ids = (
+        str(duplicate),
+        f"{duplicate}#3",
+        str(suffix_collision),
+        f"{duplicate}#4",
+    )
+    return path, actives, expected_ids
+
+
+def _load_v1_with_warnings(
+    path: Path,
+    *,
+    start: int = 0,
+    end: int | None = None,
+) -> RunPlan:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        loaded = RunPlan.load(path, start=start, end=end)
+
+    assert any(
+        warning.category is FutureWarning
+        and "version 1 is deprecated" in str(warning.message)
+        for warning in caught
+    )
+    if path.suffix == ".json":
+        assert any(
+            warning.category is DeprecationWarning
+            and "deprecated and will be removed in v0.5.0" in str(warning.message)
+            for warning in caught
+        )
+    return loaded
+
+
 @pytest.mark.parametrize("suffix", [".duckdb", ".json"])
 class TestRunPlanRoundTrip:
     def test_save_load_preserves_entries(self, tmp_path: Path, suffix: str) -> None:
         plan = _sample_plan(tmp_path)
         plan_path = tmp_path / f"job{suffix}"
 
-        plan.save(plan_path)
-        loaded = RunPlan.load(plan_path)
+        with _json_plan_warning(suffix):
+            plan.save(plan_path)
+            assert _persisted_plan_version(plan_path) == 2
+            loaded = RunPlan.load(plan_path)
 
         assert len(loaded.entries) == len(plan.entries)
         for original, restored in zip(plan.entries, loaded.entries, strict=True):
+            assert restored.id == original.id
             assert restored.active == original.active.resolve()
             assert restored.params == original.params
             assert len(restored.errors) == len(original.errors)
@@ -71,6 +237,7 @@ class TestRunPlanRoundTrip:
                 assert rest_err.active == orig_err.active.resolve()
                 assert rest_err.message == orig_err.message
                 assert rest_err.stage == orig_err.stage
+                assert rest_err.entry_id == orig_err.entry_id
                 assert rest_err.entry_index == orig_err.entry_index
                 assert rest_err.error_type == orig_err.error_type
 
@@ -78,8 +245,9 @@ class TestRunPlanRoundTrip:
         plan = RunPlan(entries=())
         plan_path = tmp_path / f"empty{suffix}"
 
-        plan.save(plan_path)
-        loaded = RunPlan.load(plan_path)
+        with _json_plan_warning(suffix):
+            plan.save(plan_path)
+            loaded = RunPlan.load(plan_path)
 
         assert loaded.entries == ()
 
@@ -116,14 +284,124 @@ class TestRunPlanValidation:
         with pytest.raises(ValueError, match="Unsupported plan file extension"):
             RunPlan.load(path)
 
-    def test_json_rejects_unsupported_version(self, tmp_path: Path) -> None:
-        path = tmp_path / "bad.json"
-        path.write_text(
-            '{"plan_version": 999, "entries": []}',
-            encoding="utf-8",
+    @pytest.mark.parametrize("suffix", [".duckdb", ".json"])
+    @pytest.mark.parametrize(
+        ("version", "match"),
+        [
+            pytest.param(None, "missing `plan_version`", id="missing"),
+            pytest.param("unknown", "Invalid `plan_version`", id="unknown"),
+            pytest.param(3, "Unsupported plan version", id="future"),
+        ],
+    )
+    def test_rejects_invalid_plan_versions(
+        self,
+        tmp_path: Path,
+        suffix: str,
+        version: int | str | None,
+        match: str,
+    ) -> None:
+        path = tmp_path / f"bad-version{suffix}"
+        _write_plan_fixture(
+            path,
+            version=version,
+            records=[],
+            include_ids=True,
         )
-        with pytest.raises(ValueError, match="Unsupported plan version"):
-            RunPlan.load(path)
+
+        with _json_plan_warning(suffix):
+            with pytest.raises(ValueError, match=match):
+                RunPlan.load(path)
+
+    @pytest.mark.parametrize("suffix", [".duckdb", ".json"])
+    @pytest.mark.parametrize(
+        ("ids", "match"),
+        [
+            pytest.param([None], "non-empty string", id="missing"),
+            pytest.param([""], "non-empty string", id="empty"),
+            pytest.param(
+                ["duplicate", "duplicate"], "unique|duplicate", id="duplicate"
+            ),
+        ],
+    )
+    def test_v2_rejects_invalid_entry_ids(
+        self,
+        tmp_path: Path,
+        suffix: str,
+        ids: list[str | None],
+        match: str,
+    ) -> None:
+        records = [
+            {
+                "entry_index": index,
+                "active": str((tmp_path / f"entry-{index}.nii.gz").resolve()),
+                "params": {"steps": [], "ordinal": index},
+                "errors": [],
+                **({} if entry_id is None else {"id": entry_id}),
+            }
+            for index, entry_id in enumerate(ids)
+        ]
+        path = tmp_path / f"bad-ids{suffix}"
+        _write_plan_fixture(
+            path,
+            version=2,
+            records=records,
+            include_ids=True,
+        )
+
+        with _json_plan_warning(suffix):
+            with pytest.raises(ValueError, match=match):
+                RunPlan.load(path)
+
+    def test_json_persistence_is_deprecated(self, tmp_path: Path) -> None:
+        plan = RunPlan(entries=())
+        path = tmp_path / "legacy.json"
+        with pytest.warns(DeprecationWarning, match=r"`_save_json` is deprecated"):
+            plan.save(path)
+        with pytest.warns(DeprecationWarning, match=r"Use `\.duckdb` instead"):
+            loaded = RunPlan.load(path)
+        assert loaded.entries == ()
+
+
+class TestRunPlanV1Compatibility:
+    def test_full_load_synthesizes_deterministic_unique_ids(
+        self,
+        v1_plan_fixture: LegacyPlanFixture,
+    ) -> None:
+        path, actives, expected_ids = v1_plan_fixture
+
+        loaded = _load_v1_with_warnings(path)
+
+        assert tuple(entry.active for entry in loaded.entries) == actives
+        assert tuple(entry.id for entry in loaded.entries) == expected_ids
+        assert tuple(entry.params["ordinal"] for entry in loaded.entries) == (
+            0,
+            1,
+            2,
+            3,
+        )
+
+    def test_ranged_load_matches_ids_from_full_plan(
+        self,
+        v1_plan_fixture: LegacyPlanFixture,
+    ) -> None:
+        path, actives, expected_ids = v1_plan_fixture
+
+        loaded = _load_v1_with_warnings(path, start=1, end=3)
+
+        assert tuple(entry.active for entry in loaded.entries) == actives[1:3]
+        assert tuple(entry.id for entry in loaded.entries) == expected_ids[1:3]
+        assert tuple(entry.params["ordinal"] for entry in loaded.entries) == (1, 2)
+
+    def test_range_reconciles_full_plan_before_slice_on_suffix_collision(
+        self,
+        v1_plan_fixture: LegacyPlanFixture,
+    ) -> None:
+        path, _, expected_ids = v1_plan_fixture
+
+        loaded = _load_v1_with_warnings(path, start=1, end=2)
+
+        assert [entry.id for entry in loaded.entries] == [expected_ids[1]]
+        assert loaded.entries[0].id.endswith("#3")
 
 
 class TestRunPlanScale:
@@ -228,9 +506,9 @@ class TestRunPlanLoadRange:
     def test_load_range_matches_slice(self, tmp_path: Path, suffix: str) -> None:
         plan = _indexed_plan(tmp_path)
         plan_path = tmp_path / f"job{suffix}"
-        plan.save(plan_path)
-
-        loaded = RunPlan.load(plan_path, start=1, end=4)
+        with _json_plan_warning(suffix):
+            plan.save(plan_path)
+            loaded = RunPlan.load(plan_path, start=1, end=4)
         assert [entry.active.name for entry in loaded.entries] == [
             entry.active.name for entry in plan.slice(start=1, end=4).entries
         ]
@@ -238,26 +516,26 @@ class TestRunPlanLoadRange:
     def test_load_range_negative_bounds(self, tmp_path: Path, suffix: str) -> None:
         plan = _indexed_plan(tmp_path)
         plan_path = tmp_path / f"job{suffix}"
-        plan.save(plan_path)
-
-        loaded = RunPlan.load(plan_path, start=-2, end=-1)
+        with _json_plan_warning(suffix):
+            plan.save(plan_path)
+            loaded = RunPlan.load(plan_path, start=-2, end=-1)
         assert [entry.active.name for entry in loaded.entries] == ["img-03.nii.gz"]
 
     def test_load_empty_range(self, tmp_path: Path, suffix: str) -> None:
         plan = _indexed_plan(tmp_path)
         plan_path = tmp_path / f"job{suffix}"
-        plan.save(plan_path)
-
-        loaded = RunPlan.load(plan_path, start=2, end=2)
+        with _json_plan_warning(suffix):
+            plan.save(plan_path)
+            loaded = RunPlan.load(plan_path, start=2, end=2)
         assert loaded.entries == ()
 
     def test_load_rejects_out_of_range(self, tmp_path: Path, suffix: str) -> None:
         plan = _indexed_plan(tmp_path)
         plan_path = tmp_path / f"job{suffix}"
-        plan.save(plan_path)
-
-        with pytest.raises(ValueError, match="`start`"):
-            RunPlan.load(plan_path, start=10)
+        with _json_plan_warning(suffix):
+            plan.save(plan_path)
+            with pytest.raises(ValueError, match="`start`"):
+                RunPlan.load(plan_path, start=10)
 
 
 class TestRunPlanWorkflowIntegration:

@@ -8,15 +8,16 @@ __all__ = [
 ]
 
 from typing import Any, Literal, cast
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 
 from niiflow.preproc.staging import StagedEntry
 from niiflow.preproc.pipelines import dynamic_pipeline
 
+from .execution_state import ExecutionState, ExecutionStatus
 from .mixins import SupportsInputDiscovery, SupportsStaging, InputData
 from .plan import RunPlan
-from .workflow import PlannableWorkflow
+from .plannable_workflow import PlannableWorkflow
 from .workflow_factory import create_workflow
 
 
@@ -58,11 +59,10 @@ class DynamicProcessingWorkflow(
     For a single entry point that instantiates the workflow and selects
     plan / execute / from-plan modes, use :func:`dynamic_workflow`.
 
-     Notes:
-        Collection of active files de-duplicates paths, and ``from_file`` with
-        ``strict: false`` can drop missing lines — either can break the one-to-one
-        alignment between active files and user-provided active-specific pipeline
-        parameters. Ensure provided active paths are unique.
+    Notes:
+        ``from_file`` with ``strict: false`` can drop missing lines, which can
+        break one-to-one alignment between collected active files and
+        user-provided per-entry pipeline parameters.
 
     Args:
         pipeline_params: Pipeline specification attached to entries before
@@ -76,13 +76,17 @@ class DynamicProcessingWorkflow(
             are built from ``pipeline_params`` without running stagers.
         num_workers: Worker count (default ``1``, serial). Use ``"auto"`` for one
             worker per CPU core, or an integer ``> 1`` for a fixed pool size.
+        staging_workers: Thread count for staging (default ``1``, serial). Use an
+            integer ``> 1`` to stage entries with a thread pool. Independent of
+            ``num_workers``; do not set this to the HPC core count by default.
         logs_root: Directory for log files; ``None`` logs to console only.
         main_logs: Emit main workflow logs.
         status_logs: Emit per-entry status lines.
         worker_logs: Emit worker-process logs when ``num_workers > 1``.
         dev_mode: Enable debug-level worker logging.
-        timeout: Soft per-entry time limit in seconds. Exceeding it does not
-            cancel the worker; ``TIMEOUT`` marks the overrun.
+        timeout: Hard per-entry execution limit in seconds. Exceeding it marks
+            the entry ``TIMEOUT`` and replaces the worker pool. ``None`` applies
+            no task timeout.
     """
 
     def __init__(
@@ -91,6 +95,7 @@ class DynamicProcessingWorkflow(
         pipeline_params: dict[str, Any] | Sequence[dict[str, Any]] | None,
         staging_params: dict[str, Any] | Sequence[dict[str, Any]] | None = None,
         num_workers: int | Literal["auto"] = 1,
+        staging_workers: int = 1,
         logs_root: Path | str | None = None,
         main_logs: bool = True,
         status_logs: bool = True,
@@ -126,6 +131,7 @@ class DynamicProcessingWorkflow(
         self.configure_staging(
             staging_params=staging_params,
             entry_params=entry_params,
+            staging_workers=staging_workers,
         )
 
     def plan(
@@ -141,7 +147,8 @@ class DynamicProcessingWorkflow(
             inputs: Run inputs accepted by
                 :meth:`~niiflow.preproc.workflows.mixins.SupportsInputDiscovery.collect_active_files`.
             save_filepaths_to: Optional ``.txt`` path for collected active file paths.
-            save_plan_to: Optional ``.duckdb`` / ``.json`` path for the staged run plan.
+            save_plan_to: Optional ``.duckdb`` path for the staged run plan
+                (``.json`` is deprecated until v0.5.0).
 
         Returns:
             A run plan containing one staged entry per collected active file.
@@ -171,7 +178,10 @@ def dynamic_workflow(
     inputs: InputData | None = None,
     save_filepaths_to: Path | str | None = None,
     save_plan_to: Path | str | None = None,
+    save_execution_state_to: Path | str | None = None,
     from_plan: Path | str | None = None,
+    from_execution_state: Path | str | None = None,
+    run_statuses: Collection[ExecutionStatus] | None = None,
     plan_only: bool = False,
     dry_run: bool = False,
     start: int = 0,
@@ -181,19 +191,26 @@ def dynamic_workflow(
 
     This is the orchestration entry point for scripts and higher-level drivers,
     analogous to :func:`~niiflow.preproc.pipelines.dynamic_pipeline`. The workflow
-    class itself stays limited to ``plan`` / ``run_plan`` / ``run``. Persist plans
-    with ``save_plan_to`` and reload via ``from_plan`` (or
-    :meth:`~niiflow.preproc.workflows.plan.RunPlan.load`) when you need the plan
-    object; this driver does not return it.
+    class itself stays limited to ``plan`` / ``run_plan`` / ``run``.
+
+    Planning artifacts use separate read/write arguments: ``from_plan`` loads an
+    existing plan, while ``save_plan_to`` persists a newly generated plan. In
+    ``from_plan`` mode planning is skipped, so ``save_plan_to`` and
+    ``save_filepaths_to`` are harmless no-ops.
+
+    Execution state follows the same explicit object/persistence model through
+    file-based orchestration: ``from_execution_state`` loads an existing state,
+    while ``save_execution_state_to`` optionally persists the state used for this
+    execution. Both may be supplied together.
 
     Modes (checked in order):
 
     * ``from_plan`` — load a saved plan and execute it (or print it when
       ``dry_run``). Planning is skipped; ``pipeline_params`` is forced to
       ``None``. ``settings`` may be omitted. Extra ``inputs`` /
-      ``pipeline_params`` are ignored with a log message. Save paths and
-      ``plan_only`` must not be set. Optional ``start`` / ``end`` select a
-      contiguous window while loading the plan.
+      ``pipeline_params`` are ignored with a log message. Planning save paths
+      are ignored. ``plan_only`` must not be set. Optional ``start`` / ``end``
+      select a contiguous window while loading the plan.
     * ``plan_only`` — build (and optionally save) a plan from ``inputs`` without
       executing. Requires ``settings`` with non-None ``pipeline_params``. With
       ``dry_run``, the plan is printed and not saved. ``start`` / ``end`` are
@@ -207,35 +224,42 @@ def dynamic_workflow(
     Args:
         settings: Keyword arguments forwarded to
             :class:`DynamicProcessingWorkflow`. Required unless ``from_plan``
-            is set; must include non-None ``pipeline_params`` for generating the plan.
-            When ``from_plan`` is set, may be omitted (treated as ``{}``) and any
-            ``pipeline_params`` entry is cleared to ``None``.
-        inputs: Run inputs for planning modes. Required unless ``from_plan`` is set.
+            is set; must include non-None ``pipeline_params`` for generating the
+            plan. When ``from_plan`` is set, may be omitted (treated as ``{}``)
+            and any ``pipeline_params`` entry is cleared to ``None``.
+        inputs: Run inputs for planning modes. Required unless ``from_plan`` is
+            set.
         save_filepaths_to: Optional ``.txt`` path for collected active files.
-        save_plan_to: Optional ``.duckdb`` / ``.json`` path for the staged plan.
-        from_plan: Path to a saved plan to load and execute (skips planning).
-        plan_only: When ``True``, stop after planning (do not execute).
-        dry_run: When ``True``, print the plan via :meth:`RunPlan.view` and do not
-            save or execute.
+            Ignored when ``from_plan`` is set.
+        save_plan_to: Optional ``.duckdb`` path for a newly staged plan
+            (``.json`` is deprecated until v0.5.0). Ignored when ``from_plan``
+            is set.
+        save_execution_state_to: Optional path at which to persist the execution
+            state used by this run. May be combined with
+            ``from_execution_state``.
+        from_plan: Path to a saved plan to load and execute, skipping planning.
+        from_execution_state: Optional path to a saved execution state to load
+            before execution.
+        run_statuses: Optional execution statuses eligible to run. ``None``
+            selects all entries supplied to execution.
+        plan_only: When ``True``, stop after planning and do not execute.
+        dry_run: When ``True``, print the plan via :meth:`RunPlan.view` and do
+            not execute. Newly generated plans are not saved.
         start: Inclusive plan entry index for execution / ranged load.
         end: Exclusive plan entry index for execution / ranged load.
 
     Raises:
-        ValueError: If mode arguments conflict or required ``settings`` / ``inputs``
-            / ``pipeline_params`` are missing.
-        TypeError: If ``settings`` is not a mapping or cannot bind to the workflow
-            constructor.
+        ValueError: If mode arguments conflict or required ``settings`` /
+            ``inputs`` / ``pipeline_params`` are missing.
+        TypeError: If ``settings`` is not a mapping or cannot bind to the
+            workflow constructor.
     """
     slicing = start != 0 or end is not None
 
     if from_plan is not None:
         if plan_only:
             raise ValueError("`from_plan` cannot be combined with `plan_only`")
-        if save_filepaths_to is not None or save_plan_to is not None:
-            raise ValueError(
-                "`from_plan` cannot be combined with `save_filepaths_to` or "
-                "`save_plan_to`"
-            )
+
         if settings is None:
             settings = {}
         elif not isinstance(settings, Mapping):
@@ -252,6 +276,7 @@ def dynamic_workflow(
                 {**settings, "pipeline_params": None},
             ),
         )
+
         if inputs is not None:
             workflow.log(
                 "Ignoring `inputs` because `from_plan` is set; the loaded plan "
@@ -274,10 +299,22 @@ def dynamic_workflow(
             )
         else:
             run_plan = RunPlan.load(from_plan)
+
         if dry_run:
             print(run_plan.view())
-        else:
-            workflow.run_plan(run_plan)
+            return
+
+        execution_state = (
+            ExecutionState.load(from_execution_state)
+            if from_execution_state is not None
+            else None
+        )
+        workflow.run_plan(
+            run_plan,
+            execution_state=execution_state,
+            save_execution_state_to=save_execution_state_to,
+            run_statuses=run_statuses,
+        )
         return
 
     if settings is None:
@@ -295,22 +332,42 @@ def dynamic_workflow(
             "`settings` must include a non-None `pipeline_params` unless "
             "`from_plan` is set"
         )
+
     workflow = cast(
         DynamicProcessingWorkflow,
         create_workflow("DynamicProcessingWorkflow", settings),
     )
+
     if plan_only and slicing:
         workflow.log(
             "Ignoring `start`/`end` because `plan_only` is set; the full plan "
             "will be built (and saved if requested).",
             level="warning",
         )
+
     run_plan = workflow.plan(
         inputs,
         save_filepaths_to=None if dry_run else save_filepaths_to,
         save_plan_to=None if dry_run else save_plan_to,
     )
+
     if dry_run:
         print(run_plan.slice(start=start, end=end).view())
-    elif not plan_only:
-        workflow.run_plan(run_plan, start=start, end=end)
+        return
+
+    if plan_only:
+        return
+
+    execution_state = (
+        ExecutionState.load(from_execution_state)
+        if from_execution_state is not None
+        else None
+    )
+    workflow.run_plan(
+        run_plan,
+        start=start,
+        end=end,
+        execution_state=execution_state,
+        save_execution_state_to=save_execution_state_to,
+        run_statuses=run_statuses,
+    )

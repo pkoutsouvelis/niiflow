@@ -26,7 +26,7 @@ class DiscoveringWorkflow(SupportsInputDiscovery, PlannableWorkflow):
     def plan(self, source: Any) -> RunPlan:
         return RunPlan(
             entries=tuple(
-                StagedEntry(active=active, params={})
+                StagedEntry(active=active, id=str(active), params={})
                 for active in self.collect_active_files(source)
             )
         )
@@ -40,12 +40,14 @@ class StagingWorkflow(SupportsStaging, PlannableWorkflow):
         *,
         staging_params: Any = None,
         entry_params: Any = None,
+        staging_workers: int = 1,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self.configure_staging(
             staging_params=staging_params,
             entry_params=entry_params,
+            staging_workers=staging_workers,
         )
 
     @staticmethod
@@ -74,6 +76,7 @@ class RecordingStager(Stager):
         seen = [*entry.params.get("seen", []), self.name]
         return StagedEntry(
             active=entry.active,
+            id=entry.id,
             params={**entry.params, "seen": seen},
             errors=entry.errors,
         )
@@ -103,7 +106,7 @@ class TestCollectActiveFiles:
         active = _touch(tmp_path / "a.nii.gz")
         assert discovering.collect_active_files(str(active)) == [active.resolve()]
 
-    def test_sequence_preserves_first_seen_order_and_dedups(
+    def test_sequence_preserves_order_including_duplicates(
         self, discovering: DiscoveringWorkflow, tmp_path: Path
     ) -> None:
         first = _touch(tmp_path / "b.nii.gz")
@@ -111,7 +114,7 @@ class TestCollectActiveFiles:
 
         found = discovering.collect_active_files([first, second, first])
 
-        assert found == [first.resolve(), second.resolve()]
+        assert found == [first.resolve(), second.resolve(), first.resolve()]
 
     def test_rejects_missing_path(
         self, discovering: DiscoveringWorkflow, tmp_path: Path
@@ -266,7 +269,7 @@ class TestCollectActiveFiles:
     def test_requires_processing_workflow_for_log(self, tmp_path: Path) -> None:
         active = _touch(tmp_path / "a.nii.gz")
         with pytest.raises(
-            AttributeError, match="must inherit from ProcessingWorkflow"
+            AttributeError, match="requires a callable log\\(\\) method"
         ):
             BareDiscovery().collect_active_files(active)
 
@@ -340,7 +343,7 @@ class TestCollectActiveFiles:
         self, discovering: DiscoveringWorkflow, tmp_path: Path
     ) -> None:
         active = _touch(tmp_path / "a.nii.gz")
-        assert discovering.collect_explicit_active_file(active) == active.resolve()
+        assert discovering._collect_explicit_active_file(active) == active.resolve()
 
     def test_collect_active_files_from_file(
         self, discovering: DiscoveringWorkflow, tmp_path: Path
@@ -351,7 +354,7 @@ class TestCollectActiveFiles:
             "\n".join(str(active) for active in actives), encoding="utf-8"
         )
 
-        found = discovering.collect_active_files_from_file(listing)
+        found = discovering._collect_active_files_from_file(listing)
 
         assert found == [active.resolve() for active in actives]
 
@@ -362,7 +365,7 @@ class TestCollectActiveFiles:
         second = _touch(tmp_path / "b.nii.gz")
         _touch(tmp_path / "notes.txt")
 
-        found = discovering.search_active_files(tmp_path, {"patterns": "*.nii*"})
+        found = discovering._search_active_files(tmp_path, {"patterns": "*.nii*"})
 
         assert found == [first.resolve(), second.resolve()]
 
@@ -382,6 +385,7 @@ class TestConfigureStaging:
         assert isinstance(wf._stagers[1], ResolveParamReferences)
         assert wf._staging_params == []
         assert wf._entry_params == {}
+        assert wf._staging_workers == 1
 
     def test_single_mapping_is_bookended(self, tmp_path: Path) -> None:
         from niiflow.preproc.staging import (
@@ -469,6 +473,34 @@ class TestStageActiveFiles:
 
         assert isinstance(plan, RunPlan)
         assert [entry.active for entry in plan.entries] == actives
+        assert [entry.id for entry in plan.entries] == [
+            str(active) for active in actives
+        ]
+
+    @pytest.mark.parametrize("staging_workers", [1, 3])
+    def test_duplicate_actives_keep_stable_ids_across_stagers(
+        self, tmp_path: Path, staging_workers: int
+    ) -> None:
+        wf = StagingWorkflow(
+            logs_root=tmp_path / "logs",
+            staging_workers=staging_workers,
+        )
+        wf._stagers = [RecordingStager("first"), RecordingStager("second")]  # type: ignore[assignment]
+        active = _touch(tmp_path / "a.nii.gz")
+
+        plan = wf.stage_active_files([active, active, active])
+
+        assert [entry.active for entry in plan.entries] == [active, active, active]
+        assert [entry.id for entry in plan.entries] == [
+            str(active),
+            f"{active}#2",
+            f"{active}#3",
+        ]
+        assert [entry.params["seen"] for entry in plan.entries] == [
+            ["first", "second"],
+            ["first", "second"],
+            ["first", "second"],
+        ]
 
     def test_allows_missing_active_without_ensure_stager(self, tmp_path: Path) -> None:
         wf = StagingWorkflow(
@@ -506,7 +538,7 @@ class TestStageActiveFiles:
     def test_save_to_writes_the_plan(self, tmp_path: Path) -> None:
         wf = StagingWorkflow(logs_root=tmp_path / "logs")
         active = _touch(tmp_path / "a.nii.gz")
-        plan_path = tmp_path / "plan.json"
+        plan_path = tmp_path / "plan.duckdb"
 
         plan = wf.stage_active_files([active], save_to=plan_path)
         loaded = RunPlan.load(plan_path)
@@ -516,10 +548,30 @@ class TestStageActiveFiles:
             entry.active for entry in plan.entries
         ]
 
+    def test_forwards_staging_workers_to_each_stager(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[int] = []
+        original = Stager.stage
+
+        def _spy(
+            self: Stager,
+            entries: object,
+            *,
+            num_workers: int = 1,
+        ) -> object:
+            seen.append(num_workers)
+            return original(self, entries, num_workers=num_workers)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Stager, "stage", _spy)
+        wf = StagingWorkflow(logs_root=tmp_path / "logs", staging_workers=4)
+        wf.stage_active_files([_touch(tmp_path / "a.nii.gz")])
+        assert seen == [4, 4]
+
     def test_requires_processing_workflow_for_log(self, tmp_path: Path) -> None:
         bare = BareStaging()
         bare.configure_staging()
         with pytest.raises(
-            AttributeError, match="must inherit from ProcessingWorkflow"
+            AttributeError, match="requires a callable log\\(\\) method"
         ):
             bare.stage_active_files([_touch(tmp_path / "a.nii.gz")])

@@ -1,7 +1,7 @@
 """Staging utilities."""
 
 from .file_stager import FileStager
-from .utility import EnsureActiveExists
+from .utility import EnsureActivesExist, EnsureActiveExists
 from .dynamic_referencing import (
     DynamicReferenceError,
     ResolveActiveReferences,
@@ -11,6 +11,9 @@ from .dynamic_referencing import (
 )
 from .modifiers import (
     get_modifiers,
+    lstrip,
+    replace,
+    rstrip,
     strip,
 )
 from .stager import (
@@ -23,6 +26,7 @@ from .stager import (
 )
 from .stager_factory import create_stager, discover_stager_classes
 from .types import (
+    InputNameSpec,
     InputSearchSpec,
     InputSpec,
     MirrorSpec,
@@ -39,6 +43,7 @@ from .types import (
 
 __all__ = [
     "FileStager",
+    "EnsureActivesExist",
     "EnsureActiveExists",
     "DynamicReferenceError",
     "ResolveActiveReferences",
@@ -46,6 +51,9 @@ __all__ = [
     "add_reference_staging_bookends",
     "resolve_dynamic_refs",
     "get_modifiers",
+    "lstrip",
+    "replace",
+    "rstrip",
     "strip",
     "StagingContext",
     "StagedEntry",
@@ -55,6 +63,7 @@ __all__ = [
     "create_stager",
     "discover_stager_classes",
     "make_entries",
+    "InputNameSpec",
     "InputSearchSpec",
     "InputSpec",
     "MirrorSpec",

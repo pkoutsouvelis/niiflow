@@ -561,6 +561,7 @@ class TestBatchStaging:
         assert staged[0].params["output"] != staged[1].params["output"]
         assert staged[0].params is not shared
         assert staged[1].params is not shared
+        assert [entry.id for entry in staged] == [entry.id for entry in entries]
 
     def test_active_file_is_never_modified(self, bids_tree: dict[str, Path]) -> None:
         stager = FileStager({"output": "output"})
@@ -598,6 +599,7 @@ class TestBatchStaging:
         assert len(staged) == 2
         assert staged[0].errors
         assert staged[0].errors[0].error_type == "FileStagingError"
+        assert staged[0].errors[0].entry_id == entries[0].id
         assert staged[0].errors[0].entry_index == 0
         assert (
             staged[1].params["output"] == good.parent / f"{_file_stem(good)}_ok.nii.gz"
@@ -630,7 +632,11 @@ class TestBatchStaging:
     ) -> None:
         missing = tmp_path / "missing.nii.gz"
         stager = FileStager({"input": "input"})
-        entry = StagedEntry(active=missing, params={"input": None})
+        entry = StagedEntry(
+            active=missing,
+            id="missing-active",
+            params={"input": None},
+        )
 
         with pytest.raises(FileStagingError, match="does not exist"):
             stager.stage_single(entry)
@@ -643,12 +649,73 @@ class TestBatchStaging:
         stager = FileStager({"mask": "input", "output": "output"})
         entry = StagedEntry(
             active=missing,
+            id="planned-active",
             params={"mask": str(existing), "output": "out.nii.gz"},
         )
 
         staged = stager.stage_single(entry)
+        assert staged.id == entry.id
         assert staged.params["mask"] == existing.resolve()
         assert staged.params["output"] == (missing.parent / "out.nii.gz").resolve()
+
+
+# ---------------------------------------------------------------------------
+# Name-based inputs
+# ---------------------------------------------------------------------------
+
+
+class TestNameInputs:
+    def test_name_joins_default_root_and_filename(
+        self, bids_tree: dict[str, Path]
+    ) -> None:
+        companion = _touch(bids_tree["active"].parent / "mask.nii.gz")
+        stager = FileStager({"mask": "input"})
+        entry = make_entries(
+            [bids_tree["active"]],
+            {"mask": {"name": "mask.nii.gz"}},
+        )[0]
+        staged = _stage(stager, [entry])[0]
+        assert staged.params["mask"] == companion
+
+    def test_name_uses_active_name_reference(self, bids_tree: dict[str, Path]) -> None:
+        stager = FileStager({"mask": "input"})
+        entry = make_entries(
+            [bids_tree["active"]],
+            {"mask": {"name": "{active.name}"}},
+        )[0]
+        staged = _stage(stager, [entry])[0]
+        assert staged.params["mask"] == bids_tree["active"]
+
+    def test_name_with_mirrored_root(self, bids_tree: dict[str, Path]) -> None:
+        mirrored = _touch(
+            bids_tree["derivative"] / "sub-01" / "ses-pre" / "func" / "mask.nii.gz"
+        )
+        stager = FileStager({"mask": "input"})
+        entry = make_entries(
+            [bids_tree["active"]],
+            {
+                "mask": {
+                    "root": {
+                        "mirror": {
+                            "source": bids_tree["root"],
+                            "target": bids_tree["derivative"],
+                        }
+                    },
+                    "name": "mask.nii.gz",
+                }
+            },
+        )[0]
+        staged = _stage(stager, [entry])[0]
+        assert staged.params["mask"] == mirrored
+
+    def test_name_rejects_list_root(self, bids_tree: dict[str, Path]) -> None:
+        stager = FileStager({"mask": "input"})
+        ctx = StagingContext(active=bids_tree["active"])
+        with pytest.raises(TypeError, match="cannot be a list"):
+            stager.get_input_file(
+                {"root": [None], "name": "mask.nii.gz"},
+                ctx=ctx,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -657,14 +724,38 @@ class TestBatchStaging:
 
 
 class TestSpecValidation:
-    def test_input_spec_requires_search_mapping(
+    def test_input_spec_requires_search_or_name(
         self, bids_tree: dict[str, Path]
     ) -> None:
         stager = FileStager({"mask": "input"})
         ctx = StagingContext(active=bids_tree["active"])
 
-        with pytest.raises(ValueError, match="missing required key"):
+        with pytest.raises(ValueError, match="exactly one of 'search' or 'name'"):
             stager.get_input_file({}, ctx=ctx)  # type: ignore[arg-type]
+
+    def test_input_spec_rejects_search_and_name(
+        self, bids_tree: dict[str, Path]
+    ) -> None:
+        stager = FileStager({"mask": "input"})
+        ctx = StagingContext(active=bids_tree["active"])
+
+        with pytest.raises(ValueError, match="exactly one of 'search' or 'name'"):
+            stager.get_input_file(
+                {"search": {"patterns": "*.nii.gz"}, "name": "a.nii.gz"},  # type: ignore[arg-type]
+                ctx=ctx,
+            )
+
+    def test_input_spec_rejects_resolve_results_with_name(
+        self, bids_tree: dict[str, Path]
+    ) -> None:
+        stager = FileStager({"mask": "input"})
+        ctx = StagingContext(active=bids_tree["active"])
+
+        with pytest.raises(ValueError, match="only valid with 'search'"):
+            stager.get_input_file(
+                {"name": "a.nii.gz", "resolve_results": "first"},  # type: ignore[arg-type]
+                ctx=ctx,
+            )
 
     def test_output_root_cannot_be_a_list(self, bids_tree: dict[str, Path]) -> None:
         stager = FileStager({"output": "output"})

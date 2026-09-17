@@ -46,7 +46,7 @@ def resolve_dynamic_refs(
     - ``{active.name}``, ``{active.stem}``, ``{active.parent}``, … — any
       :class:`~pathlib.Path` attribute via :func:`getattr` (pathlib ``stem``
       drops only the final suffix; for ``.nii.gz`` prefer
-      ``{active.name|strip:.nii.gz}``)
+      ``{active.name|rstrip:.nii.gz}``)
 
     Parameter references, resolved only when ``resolve_params=True``:
 
@@ -56,10 +56,11 @@ def resolve_dynamic_refs(
 
     Supported modifiers
     -------------------
-    References may append ``|<modifier>`` or ``|<modifier>:<arg>``. Modifiers are
+    References may append ``|<modifier>`` or ``|<modifier>:<arg[,arg...]>``.
+    Positional arguments after ``:`` are comma-separated. Modifiers are
     registered callables from :mod:`niiflow.preproc.staging.modifiers` and
-    validate their own input types. Built-in: ``strip:<suffix>`` (``str`` /
-    ``Path`` only).
+    validate their own input types. Built-in: ``rstrip:<suffix>``,
+    ``lstrip:<prefix>``, and ``replace:<old>,<new>`` (``str`` / ``Path`` only).
 
     Native type behavior
     --------------------
@@ -270,19 +271,23 @@ def _split_modifier(ref: str) -> tuple[str, str | None]:
     return base, modifier
 
 
+def _parse_modifier(modifier: str) -> tuple[str, tuple[str, ...]]:
+    """Split ``name`` / ``name:arg[,arg...]`` into a name and positional args."""
+    if ":" not in modifier:
+        return modifier.strip(), ()
+    name, rest = modifier.split(":", 1)
+    return name.strip(), tuple(part.strip() for part in rest.split(","))
+
+
 def _apply_modifier(value: Any, modifier: str | None, original_ref: str) -> Any:
-    """Apply an optional exportable modifier; map ``ValueError`` to reference errors."""
+    """Apply an optional exportable modifier; map binding/value errors to reference
+    errors."""
     if modifier is None:
         return value
 
     from .modifiers import get_modifiers
 
-    if ":" in modifier:
-        name, arg = modifier.split(":", 1)
-        name = name.strip()
-    else:
-        name, arg = modifier.strip(), None
-
+    name, args = _parse_modifier(modifier)
     if not name:
         raise DynamicReferenceError(
             f"Empty dynamic-reference modifier in {{{original_ref}}}."
@@ -299,7 +304,12 @@ def _apply_modifier(value: Any, modifier: str | None, original_ref: str) -> Any:
         ) from exc
 
     try:
-        return fn(value, arg=arg, ref=original_ref)
+        return fn(value, *args, ref=original_ref)
+    except TypeError as exc:
+        raise DynamicReferenceError(
+            f"Invalid arguments for modifier {name!r} in reference "
+            f"{{{original_ref}}}: {exc}"
+        ) from exc
     except ValueError as exc:
         raise DynamicReferenceError(str(exc)) from exc
 
@@ -340,7 +350,12 @@ class ResolveActiveReferences(Stager):
             ctx=ctx,
             resolve_params=False,
         )
-        return StagedEntry(active=entry.active, params=params, errors=entry.errors)
+        return StagedEntry(
+            active=entry.active,
+            id=entry.id,
+            params=params,
+            errors=entry.errors,
+        )
 
 
 class ResolveParamReferences(Stager):
@@ -358,4 +373,9 @@ class ResolveParamReferences(Stager):
             ctx=ctx,
             resolve_params=True,
         )
-        return StagedEntry(active=entry.active, params=params, errors=entry.errors)
+        return StagedEntry(
+            active=entry.active,
+            id=entry.id,
+            params=params,
+            errors=entry.errors,
+        )

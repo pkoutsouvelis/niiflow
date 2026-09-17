@@ -159,7 +159,9 @@ class TestImagePointwiseArithmetic:
             spacing=(1.0, 1.0, 2.0),
         )
         mask = ants_mod.from_numpy(
-            np.array([[[0.0, 1.0], [0.5, 1.0]]], dtype=np.float64)
+            np.array([[[0.0, 1.0], [0.5, 1.0]]], dtype=np.float64),
+            origin=(4.0, 5.0, 6.0),
+            spacing=(1.0, 1.0, 2.0),
         )
         out = image_pointwise_arithmetic(
             field,
@@ -170,6 +172,27 @@ class TestImagePointwiseArithmetic:
         assert out.origin == field.origin
         assert out.spacing == field.spacing
         np.testing.assert_allclose(out.numpy(), np.array([[[1.0, 1.0], [1.5, 3.0]]]))
+
+    def test_rejects_image_operand_metadata_mismatch(self, ants_mod) -> None:
+        from niiflow.preproc.functional.image.arithmetic import (
+            pointwise_arithmetic as image_pointwise_arithmetic,
+        )
+
+        field = ants_mod.from_numpy(
+            np.ones((2, 2, 2), dtype=np.float64),
+            origin=(0.0, 0.0, 0.0),
+            spacing=(1.0, 1.0, 1.0),
+        )
+        other = ants_mod.from_numpy(
+            np.ones((2, 2, 2), dtype=np.float64),
+            origin=(1.0, 0.0, 0.0),
+            spacing=(1.0, 1.0, 1.0),
+        )
+        with pytest.raises(
+            ValueError,
+            match=r"ANTsImage operand for 'mul' at operation index 0.*voxel grid",
+        ):
+            image_pointwise_arithmetic(field, {"mul": other})
 
     def test_rejects_non_ants_input(self, ants_mod) -> None:
         from niiflow.preproc.functional.image.arithmetic import (

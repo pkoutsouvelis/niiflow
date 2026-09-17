@@ -11,7 +11,8 @@ import importlib
 import inspect
 from typing import Any
 
-from .workflow import PlannableWorkflow, ProcessingWorkflow
+from .plannable_workflow import PlannableWorkflow
+from .workflow import ProcessingWorkflow
 
 _WORKFLOW_MODULES: tuple[str, ...] = ("niiflow.preproc.workflows.dynamic_workflow",)
 
