@@ -277,9 +277,7 @@ class FileStager(Stager):
                     "Mirror spec 'target' must be str or Path, "
                     f"got {type(target).__name__}."
                 )
-            allow_missing_source = bool(
-                mirror_spec.get("allow_missing_source", False)
-            )
+            allow_missing_source = bool(mirror_spec.get("allow_missing_source", False))
             result = mirror_root(
                 result,
                 source=source,

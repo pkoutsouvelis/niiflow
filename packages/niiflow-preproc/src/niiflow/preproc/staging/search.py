@@ -79,10 +79,9 @@ def mirror_root(
 ) -> Path:
     """Mirror ``root`` from a source hierarchy into a target hierarchy.
 
-    ``source`` may be one path/pattern or a list tried in order (first match wins).
-    If ``source`` is absolute, ``root`` must be below it. If ``source`` is relative, it
-    is interpreted as a parent-match pattern and matched with
-    ``selection='most_global'``.
+    ``source`` may be one path/pattern or a list tried in order (first match wins). If
+    ``source`` is absolute, ``root`` must be below it. If ``source`` is relative, it is
+    interpreted as a parent-match pattern and matched with ``selection='most_global'``.
 
     When no source matches, raise :class:`FileNotFoundError` unless
     ``allow_missing_source`` is true, in which case ``root`` is returned unchanged.
