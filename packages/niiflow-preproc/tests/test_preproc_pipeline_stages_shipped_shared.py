@@ -639,7 +639,7 @@ class TestShippedStageConstruction:
                 save_outputs={},
             )
 
-    def test_apply_transforms_check_params_rejects_whichtoinvert_with_manifest(
+    def test_apply_transforms_check_params_allows_whichtoinvert_with_manifest(
         self, tmp_path: Path
     ) -> None:
         manifest_path = tmp_path / "fwd.json"
@@ -652,16 +652,16 @@ class TestShippedStageConstruction:
             ),
             encoding="utf-8",
         )
-        with pytest.raises(ValueError, match="cannot be set"):
-            ANTsApplyTransforms(
-                params={
-                    "image": "moving.nii.gz",
-                    "target": "fixed.nii.gz",
-                    "transformlist": str(manifest_path),
-                    "whichtoinvert": [True],
-                },
-                save_outputs={},
-            )
+        stage = ANTsApplyTransforms(
+            params={
+                "image": "moving.nii.gz",
+                "target": "fixed.nii.gz",
+                "transformlist": str(manifest_path),
+                "whichtoinvert": [True],
+            },
+            save_outputs={},
+        )
+        assert stage.params["whichtoinvert"] == [True]
 
 
 class TestShippedStageRun:

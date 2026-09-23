@@ -12,10 +12,16 @@ ResolveResults: TypeAlias = Literal["first", "all", "single"]
 
 
 class MirrorSpec(TypedDict):
-    """Mirror one hierarchy into another hierarchy."""
+    """Mirror one hierarchy into another hierarchy.
 
-    source: str | Path
+    ``source`` may be a single path/pattern or a list tried in order (first match
+    wins). When no source matches, raise unless ``allow_missing_source`` is true,
+    in which case the unresolved root is left unchanged.
+    """
+
+    source: str | Path | list[str | Path]
     target: str | Path
+    allow_missing_source: NotRequired[bool]
 
 
 class RootSearchSpec(TypedDict, total=False):

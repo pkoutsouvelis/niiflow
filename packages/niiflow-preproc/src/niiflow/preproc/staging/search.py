@@ -70,15 +70,63 @@ def match_parent(
     )
 
 
-def mirror_root(root: Path, *, source: str | Path, target: str | Path) -> Path:
+def mirror_root(
+    root: Path,
+    *,
+    source: str | Path | list[str | Path],
+    target: str | Path,
+    allow_missing_source: bool = False,
+) -> Path:
     """Mirror ``root`` from a source hierarchy into a target hierarchy.
 
+    ``source`` may be one path/pattern or a list tried in order (first match wins).
     If ``source`` is absolute, ``root`` must be below it. If ``source`` is relative, it
     is interpreted as a parent-match pattern and matched with
     ``selection='most_global'``.
+
+    When no source matches, raise :class:`FileNotFoundError` unless
+    ``allow_missing_source`` is true, in which case ``root`` is returned unchanged.
     """
     root = resolve_path(root)
     target_root = resolve_path(target)
+
+    if isinstance(source, (str, Path)):
+        sources: list[str | Path] = [source]
+    elif isinstance(source, list):
+        if not source:
+            raise ValueError("Mirror source list cannot be empty.")
+        sources = list(source)
+    else:
+        raise TypeError(
+            "Mirror source must be str, Path, or list of those, "
+            f"got {type(source).__name__}."
+        )
+
+    errors: list[Exception] = []
+    for item in sources:
+        if not isinstance(item, (str, Path)):
+            raise TypeError(
+                "Mirror source entries must be str or Path, "
+                f"got {type(item).__name__}."
+            )
+        try:
+            return _mirror_root_one(root, source=item, target_root=target_root)
+        except FileNotFoundError as exc:
+            errors.append(exc)
+
+    if allow_missing_source:
+        return root
+
+    if len(errors) == 1:
+        raise errors[0]
+    tried = ", ".join(repr(str(item)) for item in sources)
+    raise FileNotFoundError(
+        f"Cannot mirror root {root}; none of the sources matched: {tried}."
+    )
+
+
+def _mirror_root_one(root: Path, *, source: str | Path, target_root: Path) -> Path:
+    """Mirror ``root`` using a single source into an already-resolved target root."""
     source_path = resolve_path(source)
 
     if source_path.is_absolute():

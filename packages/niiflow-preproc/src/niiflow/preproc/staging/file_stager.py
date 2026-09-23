@@ -252,13 +252,24 @@ class FileStager(Stager):
         mirror = root_spec.get("mirror")
         if mirror is not None:
             mirror_spec = require_mapping(mirror, "Mirror spec")
-            check_allowed_keys(mirror_spec, {"source", "target"}, "Mirror spec")
+            check_allowed_keys(
+                mirror_spec,
+                {"source", "target", "allow_missing_source"},
+                "Mirror spec",
+            )
             require_keys(mirror_spec, ["source", "target"], "Mirror spec")
             source = mirror_spec["source"]
             target = mirror_spec["target"]
-            if not isinstance(source, (str, Path)):
+            if isinstance(source, list):
+                if not source:
+                    raise ValueError("Mirror spec 'source' list cannot be empty.")
+                if not all(isinstance(item, (str, Path)) for item in source):
+                    raise TypeError(
+                        "Mirror spec 'source' list entries must be str or Path."
+                    )
+            elif not isinstance(source, (str, Path)):
                 raise TypeError(
-                    "Mirror spec 'source' must be str or Path, "
+                    "Mirror spec 'source' must be str, Path, or list of those, "
                     f"got {type(source).__name__}."
                 )
             if not isinstance(target, (str, Path)):
@@ -266,7 +277,15 @@ class FileStager(Stager):
                     "Mirror spec 'target' must be str or Path, "
                     f"got {type(target).__name__}."
                 )
-            result = mirror_root(result, source=source, target=target)
+            allow_missing_source = bool(
+                mirror_spec.get("allow_missing_source", False)
+            )
+            result = mirror_root(
+                result,
+                source=source,
+                target=target,
+                allow_missing_source=allow_missing_source,
+            )
 
         return ensure_directory(result, must_exist=must_exist)
 

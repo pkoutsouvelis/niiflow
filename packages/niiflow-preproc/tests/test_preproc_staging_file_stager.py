@@ -302,6 +302,62 @@ class TestRootResolution:
         expected = bids_tree["derivative"] / "sub-01" / "ses-pre" / "func"
         assert mirrored == expected
 
+    def test_mirror_tries_sources_in_order(self, bids_tree: dict[str, Path]) -> None:
+        stager = FileStager({})
+        ctx = StagingContext(active=bids_tree["active"])
+        missing = bids_tree["root"] / "does-not-exist"
+        mirrored = stager.get_root(
+            {
+                "mirror": {
+                    "source": [missing, bids_tree["root"]],
+                    "target": bids_tree["derivative"],
+                },
+            },
+            ctx=ctx,
+            must_exist=False,
+        )
+
+        expected = bids_tree["derivative"] / "sub-01" / "ses-pre" / "func"
+        assert mirrored == expected
+
+    def test_mirror_allow_missing_source_keeps_root(
+        self, bids_tree: dict[str, Path]
+    ) -> None:
+        stager = FileStager({})
+        ctx = StagingContext(active=bids_tree["active"])
+        missing = bids_tree["root"] / "does-not-exist"
+        mirrored = stager.get_root(
+            {
+                "mirror": {
+                    "source": missing,
+                    "target": bids_tree["derivative"],
+                    "allow_missing_source": True,
+                },
+            },
+            ctx=ctx,
+            must_exist=False,
+        )
+
+        assert mirrored == bids_tree["active"].parent
+
+    def test_mirror_missing_source_raises_by_default(
+        self, bids_tree: dict[str, Path]
+    ) -> None:
+        stager = FileStager({})
+        ctx = StagingContext(active=bids_tree["active"])
+        missing = bids_tree["root"] / "does-not-exist"
+        with pytest.raises(FileNotFoundError, match="Cannot mirror root"):
+            stager.get_root(
+                {
+                    "mirror": {
+                        "source": [missing],
+                        "target": bids_tree["derivative"],
+                    },
+                },
+                ctx=ctx,
+                must_exist=False,
+            )
+
     def test_get_roots_accepts_list_of_root_specs(
         self, bids_tree: dict[str, Path]
     ) -> None:
