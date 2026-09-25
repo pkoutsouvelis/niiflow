@@ -158,7 +158,7 @@ class Rename(PipelineStage):
         if copy:
             shutil.copy2(src, dest)
         else:
-            shutil.move(str(src), str(dest))
+            shutil.move(src, dest)
         return {"out_path": dest}
 
     def save_output(self, key: str, value: Any, output_path: Path) -> Path:

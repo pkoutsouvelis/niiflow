@@ -109,11 +109,11 @@ class TestPointerValidation:
             FileStager({1: "input"})  # type: ignore[arg-type]
 
     @pytest.mark.parametrize("pointers", [None, {}])
-    def test_pointers_may_be_omitted(self, pointers: dict[str, str] | None) -> None:
-        assert FileStager(pointers).pointers == {}  # type: ignore[arg-type]
-
-    def test_pointers_default_to_empty(self) -> None:
-        assert FileStager().pointers == {}
+    def test_rejects_empty_or_missing_pointers(
+        self, pointers: dict[str, str] | None
+    ) -> None:
+        with pytest.raises((TypeError, ValueError)):
+            FileStager(pointers)  # type: ignore[arg-type]
 
     def test_rejects_non_mapping_pointers(self) -> None:
         with pytest.raises(TypeError, match="pointers must be a dictionary"):
@@ -224,7 +224,7 @@ class TestDirectPaths:
 
 class TestRootResolution:
     def test_omitted_mode_uses_active_parent(self, bids_tree: dict[str, Path]) -> None:
-        stager = FileStager({})
+        stager = FileStager({"input": "input"})
         ctx = StagingContext(active=bids_tree["active"])
         root = stager.get_root({}, ctx=ctx, must_exist=True)
 
@@ -234,7 +234,7 @@ class TestRootResolution:
     def test_path_root_resolves_explicit_directory(
         self, bids_tree: dict[str, Path]
     ) -> None:
-        stager = FileStager({})
+        stager = FileStager({"input": "input"})
         ctx = StagingContext(active=bids_tree["active"])
         root = stager.get_root(
             {"mode": "path", "value": bids_tree["derivative"]},
@@ -247,7 +247,7 @@ class TestRootResolution:
     def test_parent_up_moves_from_active_parent(
         self, bids_tree: dict[str, Path]
     ) -> None:
-        stager = FileStager({})
+        stager = FileStager({"input": "input"})
         ctx = StagingContext(active=bids_tree["active"])
         root = stager.get_root(
             {"mode": "parent_up", "value": 2}, ctx=ctx, must_exist=True
@@ -258,7 +258,7 @@ class TestRootResolution:
     def test_parent_match_finds_nearest_matching_ancestor(
         self, bids_tree: dict[str, Path]
     ) -> None:
-        stager = FileStager({})
+        stager = FileStager({"input": "input"})
         ctx = StagingContext(active=bids_tree["active"])
         root = stager.get_root(
             {"mode": "parent_match", "value": "sub-*/ses-*"},
@@ -271,7 +271,7 @@ class TestRootResolution:
     def test_parent_match_most_global_selects_dataset_root(
         self, bids_tree: dict[str, Path]
     ) -> None:
-        stager = FileStager({})
+        stager = FileStager({"input": "input"})
         ctx = StagingContext(active=bids_tree["active"])
         root = stager.get_root(
             {
@@ -286,7 +286,7 @@ class TestRootResolution:
         assert root == bids_tree["root"] / "sub-01"
 
     def test_mirror_root_maps_derivative_tail(self, bids_tree: dict[str, Path]) -> None:
-        stager = FileStager({})
+        stager = FileStager({"input": "input"})
         ctx = StagingContext(active=bids_tree["active"])
         mirrored = stager.get_root(
             {
@@ -303,7 +303,7 @@ class TestRootResolution:
         assert mirrored == expected
 
     def test_mirror_tries_sources_in_order(self, bids_tree: dict[str, Path]) -> None:
-        stager = FileStager({})
+        stager = FileStager({"input": "input"})
         ctx = StagingContext(active=bids_tree["active"])
         missing = bids_tree["root"] / "does-not-exist"
         mirrored = stager.get_root(
@@ -323,7 +323,7 @@ class TestRootResolution:
     def test_mirror_allow_missing_source_keeps_root(
         self, bids_tree: dict[str, Path]
     ) -> None:
-        stager = FileStager({})
+        stager = FileStager({"input": "input"})
         ctx = StagingContext(active=bids_tree["active"])
         missing = bids_tree["root"] / "does-not-exist"
         mirrored = stager.get_root(
@@ -343,7 +343,7 @@ class TestRootResolution:
     def test_mirror_missing_source_raises_by_default(
         self, bids_tree: dict[str, Path]
     ) -> None:
-        stager = FileStager({})
+        stager = FileStager({"input": "input"})
         ctx = StagingContext(active=bids_tree["active"])
         missing = bids_tree["root"] / "does-not-exist"
         with pytest.raises(FileNotFoundError, match="Cannot mirror root"):
@@ -361,7 +361,7 @@ class TestRootResolution:
     def test_get_roots_accepts_list_of_root_specs(
         self, bids_tree: dict[str, Path]
     ) -> None:
-        stager = FileStager({})
+        stager = FileStager({"input": "input"})
         ctx = StagingContext(active=bids_tree["active"])
         roots = stager.get_roots(
             [
@@ -375,14 +375,14 @@ class TestRootResolution:
         assert roots == [bids_tree["active"].parent, bids_tree["derivative"]]
 
     def test_rejects_value_without_mode(self, bids_tree: dict[str, Path]) -> None:
-        stager = FileStager({})
+        stager = FileStager({"input": "input"})
         ctx = StagingContext(active=bids_tree["active"])
 
         with pytest.raises(ValueError, match="must not define a value"):
             stager.get_root({"value": "/tmp"}, ctx=ctx, must_exist=True)
 
     def test_rejects_empty_root_list(self, bids_tree: dict[str, Path]) -> None:
-        stager = FileStager({})
+        stager = FileStager({"input": "input"})
         ctx = StagingContext(active=bids_tree["active"])
 
         with pytest.raises(ValueError, match="cannot be empty"):
@@ -824,7 +824,7 @@ class TestSpecValidation:
             )
 
     def test_unknown_root_mode_is_rejected(self, bids_tree: dict[str, Path]) -> None:
-        stager = FileStager({})
+        stager = FileStager({"input": "input"})
         ctx = StagingContext(active=bids_tree["active"])
 
         with pytest.raises(ValueError, match="Unknown root mode"):

@@ -64,13 +64,12 @@ def registry_with_echo(
 
 def _workflow(
     *,
-    staging_params: dict[str, Any] | None = None,
+    staging_params: dict[str, Any] | list[dict[str, Any]] | None = None,
     pipeline_params: dict[str, Any] | list[dict[str, Any]] | None = None,
     **kwargs: Any,
 ) -> DynamicProcessingWorkflow:
     return DynamicProcessingWorkflow(
-        staging_params=staging_params
-        or {"stager_name": "FileStager", "params": {"pointers": {}}},
+        staging_params=staging_params,
         pipeline_params=pipeline_params or {"steps": []},
         **kwargs,
     )
@@ -573,12 +572,11 @@ class TestDynamicWorkflowPipeline:
 def _driver_settings(
     *,
     pipeline_params: dict[str, Any] | list[dict[str, Any]] | None = None,
-    staging_params: dict[str, Any] | None = None,
+    staging_params: dict[str, Any] | list[dict[str, Any]] | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     return {
-        "staging_params": staging_params
-        or {"stager_name": "FileStager", "params": {"pointers": {}}},
+        "staging_params": staging_params,
         "pipeline_params": pipeline_params or {"steps": []},
         "num_workers": 1,
         **kwargs,

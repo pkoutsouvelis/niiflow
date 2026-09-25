@@ -1,6 +1,7 @@
 """Staging utilities."""
 
 from .file_stager import FileStager
+from .table_stager import TableStager
 from .utility import EnsureActivesExist, EnsureActiveExists
 from .dynamic_referencing import (
     DynamicReferenceError,
@@ -43,6 +44,7 @@ from .types import (
 
 __all__ = [
     "FileStager",
+    "TableStager",
     "EnsureActivesExist",
     "EnsureActiveExists",
     "DynamicReferenceError",

@@ -62,7 +62,7 @@ class FileStager(Stager):
     Pointers are a construction-time map from dotted ``params`` paths to
     ``"input"`` or ``"output"``. Declared paths are resolved into concrete file
     locations (search / ``root`` + ``name`` / path join / existence checks).
-    ``None`` or ``{}`` means no file pointers.
+    The mapping must be non-empty.
 
     Dynamic references (``{active.*}``, ``{params.*}``) are a separate concern.
     Prefer running :class:`~niiflow.preproc.staging.dynamic_referencing.ResolveActiveReferences`
@@ -78,8 +78,8 @@ class FileStager(Stager):
 
     Args:
         pointers:
-            Mapping from dotted parameter paths to either ``"input"`` or
-            ``"output"``. ``None`` and ``{}`` both mean "no pointers".
+            Non-empty mapping from dotted parameter paths to either ``"input"``
+            or ``"output"``.
 
         ensure_inputs_exist:
             When ``True``, direct input paths must exist and be files. Search-mode
@@ -98,7 +98,7 @@ class FileStager(Stager):
 
     def __init__(
         self,
-        pointers: dict[str, PointerKind] | None = None,
+        pointers: dict[str, PointerKind],
         *,
         ensure_inputs_exist: bool = True,
         allow_overwrite: bool = True,

@@ -31,7 +31,6 @@ def _config(
     config: dict[str, Any] = {
         "settings": {
             "num_workers": 1,
-            "staging_params": {"stager_name": "FileStager", "params": {"pointers": {}}},
             "pipeline_params": {"steps": [], "out_dir": str(tmp_path / "sentinels")},
         },
         "inputs": str(inputs),

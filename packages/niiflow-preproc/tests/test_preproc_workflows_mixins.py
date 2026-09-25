@@ -395,7 +395,10 @@ class TestConfigureStaging:
 
         wf = StagingWorkflow(
             logs_root=tmp_path / "logs",
-            staging_params={"stager_name": "FileStager", "params": {"pointers": {}}},
+            staging_params={
+                "stager_name": "FileStager",
+                "params": {"pointers": {"input": "input"}},
+            },
         )
         assert len(wf._stagers) == 3
         assert isinstance(wf._stagers[0], ResolveActiveReferences)
@@ -406,8 +409,17 @@ class TestConfigureStaging:
         wf = StagingWorkflow(
             logs_root=tmp_path / "logs",
             staging_params=[
-                {"stager_name": "FileStager"},
-                {"stager_name": "FileStager", "params": {"allow_overwrite": False}},
+                {
+                    "stager_name": "FileStager",
+                    "params": {"pointers": {"input": "input"}},
+                },
+                {
+                    "stager_name": "FileStager",
+                    "params": {
+                        "pointers": {"input": "input"},
+                        "allow_overwrite": False,
+                    },
+                },
             ],
         )
         assert len(wf._stagers) == 4
@@ -423,7 +435,10 @@ class TestConfigureStaging:
             logs_root=tmp_path / "logs",
             staging_params=[
                 {"stager_name": "ResolveActiveReferences"},
-                {"stager_name": "FileStager", "params": {"pointers": {}}},
+                {
+                    "stager_name": "FileStager",
+                    "params": {"pointers": {"input": "input"}},
+                },
                 {"stager_name": "ResolveParamReferences"},
             ],
         )

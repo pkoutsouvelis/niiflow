@@ -198,10 +198,10 @@ paths into the pipeline `params` — each marked `"input"` or `"output"`:
 derivative paths. Set it to `false` to treat existing outputs as already done
 (see [Continuing from existing runs](#continuing-from-existing-runs)).
 
-`pointers` may also be omitted entirely. **Dynamic references** (`{active.*}` / `{params.*}`) 
-can be resolved throughout `params` without treating any parameter as a file to locate or 
-materialise — useful when the pipeline already spells out every path and only needs the 
-placeholders expanded. 
+`pointers` is required and must be non-empty. **Dynamic references** (`{active.*}` / `{params.*}`)
+can be resolved throughout `params` without treating any parameter as a file to locate or
+materialise — use the reference bookend stagers alone (or omit `FileStager`) when only
+placeholders need expanding.
 
 Roots can be **discovered** relative to the active file: `parent_up` (N levels up),
 `parent_match` (nearest/farthest ancestor matching a pattern), and `mirror` (rewrite one

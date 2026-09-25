@@ -52,6 +52,14 @@ def _stage(stager: Stager, entries: Sequence[StagedEntry]) -> list[StagedEntry]:
     return staged
 
 
+def _stage_refs(entries: Sequence[StagedEntry]) -> list[StagedEntry]:
+    """Run only the active/param reference bookends."""
+    staged = list(entries)
+    for step in add_reference_staging_bookends([]):
+        staged = step.stage(staged)
+    return staged
+
+
 @pytest.fixture
 def bids_tree(tmp_path: Path) -> dict[str, Path]:
     """Minimal BIDS-like tree with an active file and a sibling derivative root."""
@@ -409,7 +417,7 @@ class TestReferenceStagers:
             ResolveParamReferences().stage([entry])
 
     def test_bookends_are_idempotent(self) -> None:
-        middle = [FileStager()]
+        middle = [FileStager({"input": "input"})]
         once = add_reference_staging_bookends(middle)
         twice = add_reference_staging_bookends(once)
         assert [type(s).__name__ for s in once] == [
@@ -430,16 +438,15 @@ class TestReferenceStagers:
 
 
 class TestDynamicReferences:
-    def test_stages_dynamic_references_without_pointers(
+    def test_stages_dynamic_references_without_file_stager(
         self, bids_tree: dict[str, Path]
     ) -> None:
-        """Dynamic-reference-only staging needs no pointers at all."""
-        stager = FileStager()
+        """Reference bookends alone expand params without a FileStager."""
         entry = make_entries(
             [bids_tree["active"]],
             {"subject": "{active.stem}", "where": "{active.parent}"},
         )[0]
-        staged = _stage(stager, [entry])[0]
+        staged = _stage_refs([entry])[0]
 
         active = bids_tree["active"]
         expected_stem = active.stem
@@ -541,8 +548,7 @@ class TestDynamicReferences:
     def test_missing_params_reference_raises_outside_pointers(
         self, bids_tree: dict[str, Path]
     ) -> None:
-        # Dynamic refs are expanded for all params, not only pointer specs.
-        stager = FileStager()
+        # Dynamic refs are expanded for all params by the bookends.
         entry = make_entries(
             [bids_tree["active"]],
             {"label": "{params.missing}"},
@@ -551,7 +557,7 @@ class TestDynamicReferences:
         with pytest.raises(
             DynamicReferenceError, match="Failed to resolve params reference"
         ):
-            _stage(stager, [entry])
+            _stage_refs([entry])
 
     def test_path_attribute_on_non_filepath_param_raises(
         self, bids_tree: dict[str, Path]

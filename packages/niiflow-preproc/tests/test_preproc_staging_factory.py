@@ -96,7 +96,7 @@ class TestCreateStager:
         with pytest.raises(ValueError, match="Unknown stager"):
             create_stager(
                 "NoSuchStager",
-                {"pointers": {}},
+                {"pointers": {"input": "input"}},
             )
 
     def test_rejects_non_dict_stager_kwargs(self) -> None:
