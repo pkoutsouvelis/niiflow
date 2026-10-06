@@ -66,10 +66,12 @@ class _StaticExplorer:
             Path(root).resolve(): [Path(path).resolve() for path in paths]
             for root, paths in files_by_root.items()
         }
+        self.list_calls = 0
 
     def list(
         self, root: Path | str, *, sort: bool = True, unique: bool = True
     ) -> list[str]:
+        self.list_calls += 1
         paths = list(self.files_by_root.get(Path(root).resolve(), []))
         if unique:
             paths = list(dict.fromkeys(paths))
@@ -597,6 +599,112 @@ class TestSearchInputs:
         first = stager.get_explorer(search)
         second = stager.get_explorer(search)
         assert first is second
+
+    def test_reuses_search_results_for_same_spec_and_root(
+        self,
+        bids_tree: dict[str, Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        search_root = bids_tree["active"].parent
+        only = _touch(search_root / "cached.nii.gz")
+        explorer = _patch_explorer(monkeypatch, {search_root: [only]})
+
+        stager = FileStager({"mask": "input"})
+        ctx = StagingContext(active=bids_tree["active"])
+        spec = {"search": {"patterns": "*.nii.gz"}}
+
+        first = stager.get_input_file(spec, ctx=ctx)  # type: ignore[arg-type]
+        second = stager.get_input_file(spec, ctx=ctx)  # type: ignore[arg-type]
+
+        assert first == second == only
+        assert explorer.list_calls == 1
+
+    def test_skips_caching_oversized_search_results(
+        self,
+        bids_tree: dict[str, Path],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        import niiflow.preproc.staging.file_stager as file_stager_mod
+
+        root_a = bids_tree["active"].parent
+        root_b = bids_tree["root"] / "sub-02" / "ses-pre" / "func"
+        root_b.mkdir(parents=True, exist_ok=True)
+        hits_a = [_touch(root_a / f"a_{index:04d}.nii.gz") for index in range(5)]
+        hits_b = [_touch(root_b / f"b_{index:04d}.nii.gz") for index in range(5)]
+        explorer = _patch_explorer(
+            monkeypatch, {root_a: hits_a, root_b: hits_b}
+        )
+        monkeypatch.setattr(file_stager_mod, "_SEARCH_RESULT_CACHE_MAX_HITS", 3)
+
+        stager = FileStager({"mask": "input"})
+        search = {"patterns": "*.nii.gz"}
+
+        with caplog.at_level(logging.WARNING, logger=file_stager_mod.__name__):
+            first_a = stager._list_under_root(explorer, search, root_a)
+            second_a = stager._list_under_root(explorer, search, root_a)
+            first_b = stager._list_under_root(explorer, search, root_b)
+
+        assert first_a == second_a == sorted(hits_a)
+        assert first_b == sorted(hits_b)
+        assert explorer.list_calls == 3
+        assert not stager._search_result_cache
+        assert "per-list limit 3" in caplog.text
+        # Once per distinct (search, root); repeated walks of root_a do not re-log.
+        assert caplog.text.count("skipping store") == 2
+        assert str(root_a.resolve()) in caplog.text
+        assert str(root_b.resolve()) in caplog.text
+
+    def test_stops_caching_when_total_path_budget_is_full(
+        self,
+        bids_tree: dict[str, Path],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        import niiflow.preproc.staging.file_stager as file_stager_mod
+
+        root_a = bids_tree["active"].parent
+        root_b = bids_tree["root"] / "sub-02" / "ses-pre" / "func"
+        root_b.mkdir(parents=True, exist_ok=True)
+        hit_a = _touch(root_a / "a.nii.gz")
+        hit_b = _touch(root_b / "b.nii.gz")
+        explorer = _patch_explorer(
+            monkeypatch,
+            {root_a: [hit_a], root_b: [hit_b]},
+        )
+        monkeypatch.setattr(
+            file_stager_mod, "_SEARCH_RESULT_CACHE_MAX_TOTAL_PATHS", 1
+        )
+
+        stager = FileStager({"mask": "input"})
+        search = {"patterns": "*.nii.gz"}
+
+        with caplog.at_level(logging.WARNING, logger=file_stager_mod.__name__):
+            first_a = stager._list_under_root(
+                explorer, search, root_a
+            )
+            first_b = stager._list_under_root(
+                explorer, search, root_b
+            )
+            second_a = stager._list_under_root(
+                explorer, search, root_a
+            )
+            second_b = stager._list_under_root(
+                explorer, search, root_b
+            )
+
+        assert first_a == second_a == [hit_a]
+        assert first_b == second_b == [hit_b]
+        # root_a cached (1 path); root_b refused once budget full, then walked again
+        assert explorer.list_calls == 3
+        assert len(stager._search_result_cache) == 1
+        assert stager._search_result_cache_full is True
+        assert "search-result cache is full" in caplog.text
+        assert "total-path limit 1" in caplog.text
 
 
 # ---------------------------------------------------------------------------

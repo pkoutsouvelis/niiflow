@@ -6,6 +6,7 @@ __all__ = [
     "FileStager",
 ]
 
+import logging
 from copy import deepcopy
 from pathlib import Path
 from threading import Lock
@@ -48,6 +49,14 @@ from .validation import (
     validate_pointers,
 )
 
+logger = logging.getLogger(__name__)
+
+# Search-result cache limits (per FileStager instance / staging run).
+# A single ``list()`` larger than MAX_HITS is never stored. Inserts also stop
+# once the sum of cached path counts reaches MAX_TOTAL_PATHS.
+_SEARCH_RESULT_CACHE_MAX_HITS = 1024
+_SEARCH_RESULT_CACHE_MAX_TOTAL_PATHS = 1_000_000
+
 
 class FileStager(Stager):
     """Resolve input/output file parameters around stable active files.
@@ -75,6 +84,14 @@ class FileStager(Stager):
     Bare relative ``str`` / ``Path`` input and output specs are anchored to
     ``active.parent`` (same default as omitting ``root``, or omitting ``mode``
     on a structured root spec); absolute paths are left unchanged.
+
+    Search-mode inputs cache ``explorer.list(root)`` results keyed by
+    ``(frozen search spec, resolved root)`` so multimodal entries that share a
+    session directory reuse prior walks. Results larger than
+    ``_SEARCH_RESULT_CACHE_MAX_HITS`` are not stored; once the cache holds
+    ``_SEARCH_RESULT_CACHE_MAX_TOTAL_PATHS`` paths in total, further inserts are
+    skipped for the rest of the stager's lifetime. Both limits are module-level
+    constants.
 
     Args:
         pointers:
@@ -111,6 +128,11 @@ class FileStager(Stager):
 
         self._explorer_cache: dict[tuple[Any, ...], Any] = {}
         self._explorer_lock = Lock()
+        self._search_result_cache: dict[tuple[Any, ...], tuple[Path, ...]] = {}
+        self._search_result_cache_paths = 0
+        self._search_result_cache_full = False
+        self._search_result_logged_oversized: set[tuple[Any, ...]] = set()
+        self._search_result_lock = Lock()
 
     def stage_single(self, entry: StagedEntry, *, index: int = 0) -> StagedEntry:
         """Stage one entry while preserving its
@@ -361,9 +383,7 @@ class FileStager(Stager):
 
         found: list[Path] = []
         for root in roots:
-            found.extend(
-                Path(path) for path in explorer.list(root, sort=True, unique=True)
-            )
+            found.extend(self._list_under_root(explorer, search_spec, root))
 
         policy = input_spec.get("resolve_results", "first")
         return resolve_search_result(found, policy=policy, pointer=pointer)
@@ -378,6 +398,80 @@ class FileStager(Stager):
             if key not in self._explorer_cache:
                 self._explorer_cache[key] = get_data_explorer(**search_spec)
             return self._explorer_cache[key]
+
+    def _list_under_root(
+        self,
+        explorer: Any,
+        search_spec: dict[str, Any],
+        root: Path,
+    ) -> list[Path]:
+        """List files under ``root``, reusing cached results when possible.
+
+        Cache key is ``(frozen search spec, resolved root)``. Unhashable search
+        specs skip caching. Oversized single results and a full total-path budget
+        still return fresh ``list()`` output; they are just not stored.
+        """
+        resolved_root = resolve_path(root)
+        spec_key = explorer_cache_key(search_spec)
+        cache_key: tuple[Any, ...] | None = (
+            None if spec_key is None else (spec_key, resolved_root)
+        )
+
+        if cache_key is not None:
+            with self._search_result_lock:
+                cached = self._search_result_cache.get(cache_key)
+                if cached is not None:
+                    return list(cached)
+
+        hits = [
+            Path(path) for path in explorer.list(resolved_root, sort=True, unique=True)
+        ]
+
+        if cache_key is None:
+            return hits
+
+        n_hits = len(hits)
+        with self._search_result_lock:
+            cached = self._search_result_cache.get(cache_key)
+            if cached is not None:
+                return list(cached)
+
+            if n_hits > _SEARCH_RESULT_CACHE_MAX_HITS:
+                if cache_key not in self._search_result_logged_oversized:
+                    self._search_result_logged_oversized.add(cache_key)
+                    logger.warning(
+                        "FileStager search-result cache: skipping store for "
+                        "search under root %s (%d hits > per-list limit %d). "
+                        "This (search, root) will not be cached; other oversized "
+                        "searches are still reported separately.",
+                        resolved_root,
+                        n_hits,
+                        _SEARCH_RESULT_CACHE_MAX_HITS,
+                    )
+                return hits
+
+            if self._search_result_cache_full:
+                return hits
+
+            if self._search_result_cache_paths + n_hits > (
+                _SEARCH_RESULT_CACHE_MAX_TOTAL_PATHS
+            ):
+                self._search_result_cache_full = True
+                logger.warning(
+                    "FileStager search-result cache is full "
+                    "(%d paths cached across %d roots; total-path limit %d). "
+                    "New (search, root) results will not be stored for the rest "
+                    "of this stager; filesystem walks may repeat.",
+                    self._search_result_cache_paths,
+                    len(self._search_result_cache),
+                    _SEARCH_RESULT_CACHE_MAX_TOTAL_PATHS,
+                )
+                return hits
+
+            self._search_result_cache[cache_key] = tuple(hits)
+            self._search_result_cache_paths += n_hits
+
+        return hits
 
     @staticmethod
     def _anchor_to_active(path: str | Path, *, ctx: StagingContext) -> Path:
