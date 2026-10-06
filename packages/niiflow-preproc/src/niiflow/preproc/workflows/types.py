@@ -38,7 +38,8 @@ class FromFileInput(TypedDict):
 
     Optional ``strict`` and ``skip_resolve_filepaths`` are forwarded to
     :func:`~niiflow.preproc.data.read_paths_from_file` (defaults ``True`` and ``False``
-    respectively).
+    respectively). When ``strict`` is ``False``, listed paths are kept without an
+    existence check.
     """
 
     mode: Literal["from_file"]

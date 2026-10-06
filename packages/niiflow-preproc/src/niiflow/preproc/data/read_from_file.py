@@ -26,19 +26,21 @@ def read_paths_from_file(
     list path itself is always resolved.
 
     When ``strict`` is ``True``, each listed path must exist and be a file.
-    When ``False``, missing paths and directories are skipped.
+    When ``False``, every non-blank line is kept as a path with no existence
+    check (existence can be enforced later by staging or execution).
 
     Args:
         path: Path to a ``.txt`` file containing one filesystem path per line.
         strict: When ``True`` (default), raise if a listed path does not exist
-            or is not a file. When ``False``, skip such entries.
+            or is not a file. When ``False``, keep listed paths without checking
+            that they exist.
         skip_resolve_filepaths: When ``False`` (default), expand and resolve
             each extracted filepath. When ``True``, do not expand or resolve
             listed paths (parsed as they are). Does not affect resolution of
             ``path``.
 
     Returns:
-        :class:`~pathlib.Path` objects for every accepted file, in file order.
+        :class:`~pathlib.Path` objects for every non-blank line, in file order.
 
     Raises:
         FileNotFoundError: If ``path`` does not exist.
@@ -68,15 +70,12 @@ def read_paths_from_file(
             continue
 
         candidate = Path(entry) if skip_resolve_filepaths else resolve_path(entry)
-        if candidate.is_file():
-            found.append(candidate)
-            continue
-
-        if strict:
+        if strict and not candidate.is_file():
             kind = "directory" if candidate.exists() else "missing path"
             raise ValueError(
                 f"Line {line_no} of {list_path} is not an existing file "
                 f"({kind}): {candidate}"
             )
+        found.append(candidate)
 
     return found

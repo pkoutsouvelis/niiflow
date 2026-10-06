@@ -60,9 +60,8 @@ class DynamicProcessingWorkflow(
     plan / execute / from-plan modes, use :func:`dynamic_workflow`.
 
     Notes:
-        ``from_file`` with ``strict: false`` can drop missing lines, which can
-        break one-to-one alignment between collected active files and
-        user-provided per-entry pipeline parameters.
+        ``from_file`` with ``strict: false`` keeps listed paths without checking
+        that they exist on disk. Existence is deferred to staging or execution.
 
     Args:
         pipeline_params: Pipeline specification attached to entries before

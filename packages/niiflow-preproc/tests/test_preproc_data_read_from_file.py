@@ -50,17 +50,34 @@ class TestReadPathsFromFile:
         with pytest.raises(ValueError, match="directory"):
             read_paths_from_file(list_file, strict=True)
 
-    def test_non_strict_skips_missing_and_directories(self, tmp_path: Path) -> None:
+    def test_non_strict_keeps_missing_and_directories(self, tmp_path: Path) -> None:
         a = tmp_path / "a.nii.gz"
         a.write_bytes(b"")
+        missing = tmp_path / "missing.nii.gz"
         sub = tmp_path / "subdir"
         sub.mkdir()
         list_file = _write_list(
             tmp_path / "files.txt",
-            [str(tmp_path / "missing.nii.gz"), str(sub), str(a)],
+            [str(missing), str(sub), str(a)],
         )
 
-        assert read_paths_from_file(list_file, strict=False) == [a.resolve()]
+        assert read_paths_from_file(list_file, strict=False) == [
+            missing.resolve(),
+            sub.resolve(),
+            a.resolve(),
+        ]
+
+    def test_non_strict_skip_resolve_keeps_missing_without_stat(
+        self, tmp_path: Path
+    ) -> None:
+        missing = tmp_path / "missing.nii.gz"
+        list_file = _write_list(tmp_path / "files.txt", [str(missing)])
+
+        paths = read_paths_from_file(
+            list_file, strict=False, skip_resolve_filepaths=True
+        )
+
+        assert paths == [Path(str(missing))]
 
     def test_rejects_non_txt_list_file(self, tmp_path: Path) -> None:
         bad = tmp_path / "files.csv"

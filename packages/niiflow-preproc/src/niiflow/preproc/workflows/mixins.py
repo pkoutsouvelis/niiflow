@@ -45,7 +45,8 @@ class SupportsInputDiscovery:
     Existence rules are per source: explicit paths must exist as files; ``search``
     hits exist by construction (roots must exist); ``from_file`` existence follows
     optional ``strict`` (default ``True``) on
-    :func:`~niiflow.preproc.data.read_paths_from_file`.
+    :func:`~niiflow.preproc.data.read_paths_from_file` — when ``strict`` is
+    ``False``, listed paths are kept without an existence check.
 
     Requires :meth:`~niiflow.preproc.workflows.workflow.ProcessingWorkflow.log`
     from the concrete workflow.

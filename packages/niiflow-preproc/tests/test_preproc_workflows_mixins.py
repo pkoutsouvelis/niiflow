@@ -122,20 +122,19 @@ class TestCollectActiveFiles:
         with pytest.raises(FileNotFoundError):
             discovering.collect_active_files(tmp_path / "nope.nii.gz")
 
-    def test_from_file_strict_false_skips_missing(
+    def test_from_file_strict_false_keeps_missing(
         self, discovering: DiscoveringWorkflow, tmp_path: Path
     ) -> None:
         existing = _touch(tmp_path / "a.nii.gz")
+        missing = tmp_path / "missing.nii.gz"
         listing = tmp_path / "files.txt"
-        listing.write_text(
-            f"{existing}\n{tmp_path / 'missing.nii.gz'}\n", encoding="utf-8"
-        )
+        listing.write_text(f"{existing}\n{missing}\n", encoding="utf-8")
 
         found = discovering.collect_active_files(
             {"mode": "from_file", "path": listing, "strict": False}
         )
 
-        assert found == [existing.resolve()]
+        assert found == [existing.resolve(), missing.resolve()]
 
     def test_from_file_strict_true_raises_on_missing(
         self, discovering: DiscoveringWorkflow, tmp_path: Path
