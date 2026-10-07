@@ -138,9 +138,15 @@ class Stager(ABC):
     A ``stage_single`` implementation may preserve, replace, or omit an entry ID. After
     :meth:`stage` returns, every entry has a non-empty ID unique within the returned
     collection.
+
+    :attr:`resolve_actives` controls whether this stager realpaths the incoming active
+    before using it as an anchor. It defaults to ``True``. Stagers that mint new actives
+    should resolve those paths themselves before returning them; this flag only applies
+    to the active the stager was given.
     """
 
     allow_failed_entries: bool = False
+    resolve_actives: bool = True
 
     def stage(
         self, entries: Sequence[StagedEntry], *, num_workers: int = 1

@@ -122,7 +122,7 @@ class TestCollectActiveFiles:
         with pytest.raises(FileNotFoundError):
             discovering.collect_active_files(tmp_path / "nope.nii.gz")
 
-    def test_from_file_strict_false_keeps_missing(
+    def test_from_file_must_exist_false_keeps_missing(
         self, discovering: DiscoveringWorkflow, tmp_path: Path
     ) -> None:
         existing = _touch(tmp_path / "a.nii.gz")
@@ -131,7 +131,7 @@ class TestCollectActiveFiles:
         listing.write_text(f"{existing}\n{missing}\n", encoding="utf-8")
 
         found = discovering.collect_active_files(
-            {"mode": "from_file", "path": listing, "strict": False}
+            {"mode": "from_file", "path": listing, "must_exist": False}
         )
 
         assert found == [existing.resolve(), missing.resolve()]
@@ -148,14 +148,14 @@ class TestCollectActiveFiles:
         with pytest.raises(ValueError, match="not an existing file"):
             discovering.collect_active_files({"mode": "from_file", "path": listing})
 
-    def test_from_file_rejects_non_bool_strict(
+    def test_from_file_rejects_non_bool_must_exist(
         self, discovering: DiscoveringWorkflow, tmp_path: Path
     ) -> None:
         listing = tmp_path / "files.txt"
         listing.write_text("", encoding="utf-8")
-        with pytest.raises(TypeError, match="`strict` must be a boolean"):
+        with pytest.raises(TypeError, match="`must_exist` must be a boolean"):
             discovering.collect_active_files(
-                {"mode": "from_file", "path": listing, "strict": "yes"}  # type: ignore[arg-type]
+                {"mode": "from_file", "path": listing, "must_exist": "yes"}  # type: ignore[arg-type]
             )
 
     def test_rejects_directory(
@@ -205,7 +205,7 @@ class TestCollectActiveFiles:
         with pytest.raises(ValueError, match="`from_file` input requires `path`"):
             discovering.collect_active_files({"mode": "from_file"})  # type: ignore[arg-type]
 
-    def test_from_file_skip_resolve_filepaths(
+    def test_from_file_resolve_false(
         self, discovering: DiscoveringWorkflow, tmp_path: Path
     ) -> None:
         active = _touch(tmp_path / "a.nii.gz")
@@ -213,13 +213,30 @@ class TestCollectActiveFiles:
         listing.write_text(str(active) + "\n", encoding="utf-8")
 
         found = discovering.collect_active_files(
-            {
-                "mode": "from_file",
-                "path": listing,
-                "skip_resolve_filepaths": True,
-            }
+            {"mode": "from_file", "path": listing, "resolve": False}
         )
 
+        assert found == [Path(str(active))]
+
+    def test_from_file_deprecated_aliases_warn(
+        self, discovering: DiscoveringWorkflow, tmp_path: Path
+    ) -> None:
+        active = _touch(tmp_path / "a.nii.gz")
+        listing = tmp_path / "files.txt"
+        listing.write_text(str(active) + "\n", encoding="utf-8")
+
+        with pytest.warns(DeprecationWarning, match="`strict` is deprecated"):
+            discovering.collect_active_files(
+                {"mode": "from_file", "path": listing, "strict": False}
+            )
+        with pytest.warns(DeprecationWarning, match="skip_resolve_filepaths"):
+            found = discovering.collect_active_files(
+                {
+                    "mode": "from_file",
+                    "path": listing,
+                    "skip_resolve_filepaths": True,
+                }
+            )
         assert found == [Path(str(active))]
 
     def test_from_file_rejects_non_bool_skip_resolve_filepaths(
@@ -227,14 +244,15 @@ class TestCollectActiveFiles:
     ) -> None:
         listing = tmp_path / "files.txt"
         listing.write_text("", encoding="utf-8")
-        with pytest.raises(TypeError, match="skip_resolve_filepaths"):
-            discovering.collect_active_files(
-                {
-                    "mode": "from_file",
-                    "path": listing,
-                    "skip_resolve_filepaths": "yes",
-                }  # type: ignore[arg-type]
-            )
+        with pytest.warns(DeprecationWarning, match="skip_resolve_filepaths"):
+            with pytest.raises(TypeError, match="skip_resolve_filepaths"):
+                discovering.collect_active_files(
+                    {
+                        "mode": "from_file",
+                        "path": listing,
+                        "skip_resolve_filepaths": "yes",
+                    }  # type: ignore[arg-type]
+                )
 
     def test_search_mode_requires_roots(self, discovering: DiscoveringWorkflow) -> None:
         with pytest.raises(ValueError, match="`search` input requires `roots`"):
@@ -353,7 +371,9 @@ class TestCollectActiveFiles:
             "\n".join(str(active) for active in actives), encoding="utf-8"
         )
 
-        found = discovering._collect_active_files_from_file(listing)
+        found = discovering._collect_active_files_from_file(
+            {"mode": "from_file", "path": listing}
+        )
 
         assert found == [active.resolve() for active in actives]
 
@@ -528,6 +548,19 @@ class TestStageActiveFiles:
         assert len(plan.entries) == 1
         assert plan.entries[0].active == missing.resolve()
         assert plan.entries[0].params["subject"] == "img.nii"
+
+    def test_resolve_actives_false_keeps_symlink(self, tmp_path: Path) -> None:
+        wf = StagingWorkflow(logs_root=tmp_path / "logs")
+        target = _touch(tmp_path / "target.nii.gz")
+        link = tmp_path / "alias.nii.gz"
+        link.symlink_to(target)
+
+        resolved = wf.stage_active_files([link])
+        unresolved = wf.stage_active_files([link], resolve_actives=False)
+
+        assert resolved.entries[0].active == target
+        assert resolved.entries[0].id == str(target)
+        assert unresolved.entries[0].active == link.absolute()
 
     def test_entry_params_are_attached_to_every_entry(self, tmp_path: Path) -> None:
         wf = StagingWorkflow(

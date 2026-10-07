@@ -36,14 +36,16 @@ class SearchInput(TypedDict):
 class FromFileInput(TypedDict):
     """Load active file paths from a text file (one path per line).
 
-    Optional ``strict`` and ``skip_resolve_filepaths`` are forwarded to
-    :func:`~niiflow.preproc.data.read_paths_from_file` (defaults ``True`` and ``False``
-    respectively). When ``strict`` is ``False``, listed paths are kept without an
-    existence check.
+    Optional ``resolve`` and ``must_exist`` are forwarded to
+    :func:`~niiflow.preproc.data.read_paths_from_file` (both default ``True``).
+    ``strict`` and ``skip_resolve_filepaths`` are deprecated aliases removed in v0.5.0
+    (``strict`` → ``must_exist``; ``skip_resolve_filepaths=True`` → ``resolve=False``).
     """
 
     mode: Literal["from_file"]
     path: Path | str
+    resolve: NotRequired[bool]
+    must_exist: NotRequired[bool]
     strict: NotRequired[bool]
     skip_resolve_filepaths: NotRequired[bool]
 

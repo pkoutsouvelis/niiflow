@@ -23,13 +23,16 @@ class EnsureActivesExist(Stager):
     stagers may skip it.
     """
 
-    def __init__(self, *, allow_failed_entries: bool = False) -> None:
+    def __init__(
+        self, *, allow_failed_entries: bool = False, resolve_actives: bool = True
+    ) -> None:
         self.allow_failed_entries = bool(allow_failed_entries)
+        self.resolve_actives = bool(resolve_actives)
 
     def stage_single(self, entry: StagedEntry) -> StagedEntry:
         if entry.errors:
             return entry
-        ensure_file(entry.active, must_exist=True)
+        ensure_file(entry.active, must_exist=True, resolve=self.resolve_actives)
         return entry
 
 
@@ -40,5 +43,10 @@ class EnsureActiveExists(EnsureActivesExist):
     """
 
     @deprecate(remove_in="0.5.0", alternative="EnsureActivesExist")
-    def __init__(self, *, allow_failed_entries: bool = False) -> None:
-        super().__init__(allow_failed_entries=allow_failed_entries)
+    def __init__(
+        self, *, allow_failed_entries: bool = False, resolve_actives: bool = True
+    ) -> None:
+        super().__init__(
+            allow_failed_entries=allow_failed_entries,
+            resolve_actives=resolve_actives,
+        )

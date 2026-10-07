@@ -600,6 +600,29 @@ class TestSearchInputs:
         second = stager.get_explorer(search)
         assert first is second
 
+    def test_resolve_actives_false_does_not_realpath_anchor(
+        self, bids_tree: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        target = bids_tree["active"]
+        link = target.parent / "alias.nii.gz"
+        link.symlink_to(target)
+        resolved_paths: list[Path] = []
+        real_resolve = Path.resolve
+
+        def _resolve(self: Path, *args: Any, **kwargs: Any) -> Path:
+            resolved_paths.append(Path(self))
+            return real_resolve(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", _resolve)
+        stager = FileStager({"output": "output"}, resolve_actives=False)
+        entry = make_entries([link], {"output": "out.nii.gz"}, resolve_actives=False)[0]
+
+        staged = stager.stage_single(entry)
+
+        assert staged.active == link.absolute()
+        assert link.absolute() not in resolved_paths
+        assert link not in resolved_paths
+
     def test_reuses_search_results_for_same_spec_and_root(
         self,
         bids_tree: dict[str, Path],
@@ -634,9 +657,7 @@ class TestSearchInputs:
         root_b.mkdir(parents=True, exist_ok=True)
         hits_a = [_touch(root_a / f"a_{index:04d}.nii.gz") for index in range(5)]
         hits_b = [_touch(root_b / f"b_{index:04d}.nii.gz") for index in range(5)]
-        explorer = _patch_explorer(
-            monkeypatch, {root_a: hits_a, root_b: hits_b}
-        )
+        explorer = _patch_explorer(monkeypatch, {root_a: hits_a, root_b: hits_b})
         monkeypatch.setattr(file_stager_mod, "_SEARCH_RESULT_CACHE_MAX_HITS", 3)
 
         stager = FileStager({"mask": "input"})
@@ -676,26 +697,16 @@ class TestSearchInputs:
             monkeypatch,
             {root_a: [hit_a], root_b: [hit_b]},
         )
-        monkeypatch.setattr(
-            file_stager_mod, "_SEARCH_RESULT_CACHE_MAX_TOTAL_PATHS", 1
-        )
+        monkeypatch.setattr(file_stager_mod, "_SEARCH_RESULT_CACHE_MAX_TOTAL_PATHS", 1)
 
         stager = FileStager({"mask": "input"})
         search = {"patterns": "*.nii.gz"}
 
         with caplog.at_level(logging.WARNING, logger=file_stager_mod.__name__):
-            first_a = stager._list_under_root(
-                explorer, search, root_a
-            )
-            first_b = stager._list_under_root(
-                explorer, search, root_b
-            )
-            second_a = stager._list_under_root(
-                explorer, search, root_a
-            )
-            second_b = stager._list_under_root(
-                explorer, search, root_b
-            )
+            first_a = stager._list_under_root(explorer, search, root_a)
+            first_b = stager._list_under_root(explorer, search, root_b)
+            second_a = stager._list_under_root(explorer, search, root_a)
+            second_b = stager._list_under_root(explorer, search, root_b)
 
         assert first_a == second_a == [hit_a]
         assert first_b == second_b == [hit_b]

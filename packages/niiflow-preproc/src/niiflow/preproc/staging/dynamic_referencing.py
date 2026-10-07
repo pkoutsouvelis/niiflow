@@ -341,7 +341,9 @@ class ResolveActiveReferences(Stager):
     def stage_single(self, entry: StagedEntry) -> StagedEntry:
         if entry.errors:
             return entry
-        active = ensure_file(entry.active, must_exist=False)
+        active = ensure_file(
+            entry.active, must_exist=False, resolve=self.resolve_actives
+        )
         ctx = StagingContext(active=active)
         params = deepcopy(entry.params)
         params = resolve_dynamic_refs(
@@ -364,7 +366,9 @@ class ResolveParamReferences(Stager):
     def stage_single(self, entry: StagedEntry) -> StagedEntry:
         if entry.errors:
             return entry
-        active = ensure_file(entry.active, must_exist=False)
+        active = ensure_file(
+            entry.active, must_exist=False, resolve=self.resolve_actives
+        )
         ctx = StagingContext(active=active)
         params = deepcopy(entry.params)
         params = resolve_dynamic_refs(

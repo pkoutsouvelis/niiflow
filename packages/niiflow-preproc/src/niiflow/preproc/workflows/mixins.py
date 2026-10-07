@@ -44,9 +44,10 @@ class SupportsInputDiscovery:
 
     Existence rules are per source: explicit paths must exist as files; ``search``
     hits exist by construction (roots must exist); ``from_file`` existence follows
-    optional ``strict`` (default ``True``) on
-    :func:`~niiflow.preproc.data.read_paths_from_file` — when ``strict`` is
-    ``False``, listed paths are kept without an existence check.
+    optional ``must_exist`` (default ``True``) on
+    :func:`~niiflow.preproc.data.read_paths_from_file`. ``resolve`` (default
+    ``True``) controls whether listed paths are realpathed. ``strict`` and
+    ``skip_resolve_filepaths`` are deprecated aliases removed in v0.5.0.
 
     Requires :meth:`~niiflow.preproc.workflows.workflow.ProcessingWorkflow.log`
     from the concrete workflow.
@@ -149,18 +150,7 @@ class SupportsInputDiscovery:
                         raise ValueError(
                             "from_file inputs are not allowed (`allow_from_file=False`)"
                         )
-                    path = item.get("path")
-                    if path is None or not isinstance(path, (str, Path)):
-                        raise ValueError("`from_file` input requires `path`")
-                    found.extend(
-                        self._collect_active_files_from_file(
-                            path,
-                            strict=item.get("strict", True),
-                            skip_resolve_filepaths=item.get(
-                                "skip_resolve_filepaths", False
-                            ),
-                        )
-                    )
+                    found.extend(self._collect_active_files_from_file(item))
                     continue
                 raise ValueError(
                     f"Unknown/missing run-input mode {mode!r}; expected 'search' or 'from_file'"
@@ -198,22 +188,19 @@ class SupportsInputDiscovery:
             )
         return resolved
 
-    def _collect_active_files_from_file(
-        self,
-        path: Path | str,
-        *,
-        strict: bool = True,
-        skip_resolve_filepaths: bool = False,
-    ) -> list[Path]:
-        """Read active file paths from a ``.txt`` listing (one path per line)."""
+    def _collect_active_files_from_file(self, item: dict[str, Any]) -> list[Path]:
+        """Read active file paths from a ``from_file`` input mapping."""
+        path = item.get("path")
         if not isinstance(path, (str, Path)):
             raise ValueError("`from_file` input requires `path`")
         list_path = resolve_path(path)
         self.log(f"Reading file paths from: {list_path}")  # type: ignore[attr-defined]
         return read_paths_from_file(
             list_path,
-            strict=strict,
-            skip_resolve_filepaths=skip_resolve_filepaths,
+            must_exist=item.get("must_exist"),
+            resolve=item.get("resolve"),
+            strict=item.get("strict"),
+            skip_resolve_filepaths=item.get("skip_resolve_filepaths"),
         )
 
     def _search_active_files(
@@ -373,17 +360,29 @@ class SupportsStaging:
         active_files: Sequence[Path],
         *,
         save_to: Path | str | None = None,
+        resolve_actives: bool = True,
     ) -> RunPlan:
         """Stage active files into a :class:`~niiflow.preproc.workflows.plan.RunPlan`.
 
         Args:
-            active_files: Absolute active file paths to stage.
+            active_files: Active file paths to stage.
             save_to: Optional ``.duckdb`` path where the staged plan is written
                 (``.json`` is deprecated until v0.5.0). ``None`` skips saving.
+            resolve_actives: When ``True`` (default), realpath each active while
+                building entries (and therefore entry ids from those paths).
+                When ``False``, keep an absolute path without symlink
+                resolution. Each stager still has its own ``resolve_actives``
+                for the anchor it receives (default ``True``). Callers that
+                already canonicalized actives (for example after input
+                discovery) should pass ``False`` to avoid a second realpath.
 
         Returns:
             A run plan containing one staged entry per active file.
         """
+        if not isinstance(resolve_actives, bool):
+            raise TypeError(
+                f"`resolve_actives` must be a boolean, got {type(resolve_actives).__name__}"
+            )
         log = getattr(self, "log", None)
         if not callable(log):
             raise AttributeError(
@@ -392,7 +391,9 @@ class SupportsStaging:
                 "Combine with ProcessingWorkflow (or otherwise define log)."
             )
         log(f"Staging {len(active_files)} entries...")
-        entries = make_entries(active_files, self._entry_params)
+        entries = make_entries(
+            active_files, self._entry_params, resolve_actives=resolve_actives
+        )
         num_workers = self._staging_workers
         for stager in self._stagers:
             if num_workers > 1:

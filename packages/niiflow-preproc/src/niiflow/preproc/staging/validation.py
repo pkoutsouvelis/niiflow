@@ -9,34 +9,90 @@ from .types import PointerKind
 from niiflow.preproc.utils.file import resolve_path
 
 
-def ensure_file(path: Path | str, *, must_exist: bool = True) -> Path:
-    """Ensure that a path exists and is a file."""
-    path = resolve_path(path)
-    if must_exist and not path.exists():
-        raise FileNotFoundError(f"File does not exist: {path}")
-    if must_exist and not path.is_file():
-        raise ValueError(f"Path is not a file: {path}")
-    return path
+def ensure_file(
+    path: Path | str, *, must_exist: bool = True, resolve: bool = True
+) -> Path:
+    """Normalize ``path`` and optionally require it to be an existing file.
+
+    When ``resolve`` is ``True`` (default), expand the user and resolve symlinks. When
+    ``False``, expand the user and make the path absolute without walking the
+    filesystem.
+    """
+    if not isinstance(resolve, bool):
+        raise TypeError(f"`resolve` must be a boolean, got {type(resolve).__name__}")
+    if not isinstance(must_exist, bool):
+        raise TypeError(
+            f"`must_exist` must be a boolean, got {type(must_exist).__name__}"
+        )
+    if resolve:
+        normalized = resolve_path(path)
+    else:
+        if not isinstance(path, (Path, str)):
+            raise ValueError(f"`path` must be a Path or str, got {type(path).__name__}")
+        normalized = Path(path).expanduser().absolute()
+    if must_exist and not normalized.exists():
+        raise FileNotFoundError(f"File does not exist: {normalized}")
+    if must_exist and not normalized.is_file():
+        raise ValueError(f"Path is not a file: {normalized}")
+    return normalized
 
 
-def ensure_directory(path: Path | str, *, must_exist: bool = True) -> Path:
-    """Ensure that a path exists and is a directory."""
-    path = resolve_path(path)
-    if must_exist and not path.exists():
-        raise FileNotFoundError(f"Directory does not exist: {path}")
-    if must_exist and not path.is_dir():
-        raise ValueError(f"Path is not a directory: {path}")
-    return path
+def ensure_directory(
+    path: Path | str, *, must_exist: bool = True, resolve: bool = True
+) -> Path:
+    """Normalize ``path`` and optionally require it to be an existing directory.
+
+    When ``resolve`` is ``True`` (default), expand the user and resolve symlinks. When
+    ``False``, expand the user and make the path absolute without walking the
+    filesystem.
+    """
+    if not isinstance(resolve, bool):
+        raise TypeError(f"`resolve` must be a boolean, got {type(resolve).__name__}")
+    if not isinstance(must_exist, bool):
+        raise TypeError(
+            f"`must_exist` must be a boolean, got {type(must_exist).__name__}"
+        )
+    if resolve:
+        normalized = resolve_path(path)
+    else:
+        if not isinstance(path, (Path, str)):
+            raise ValueError(f"`path` must be a Path or str, got {type(path).__name__}")
+        normalized = Path(path).expanduser().absolute()
+    if must_exist and not normalized.exists():
+        raise FileNotFoundError(f"Directory does not exist: {normalized}")
+    if must_exist and not normalized.is_dir():
+        raise ValueError(f"Path is not a directory: {normalized}")
+    return normalized
 
 
-def ensure_no_overwrite(path: Path | str, *, allow_overwrite: bool = False) -> Path:
-    """Ensure that a path does not already exist."""
-    path = resolve_path(path)
-    if path.exists() and path.is_dir():
-        raise ValueError(f"Output path points to an existing directory: {path}")
-    if path.exists() and not allow_overwrite:
-        raise FileExistsError(f"Path already exists and allow_overwrite=False: {path}")
-    return path
+def ensure_no_overwrite(
+    path: Path | str, *, allow_overwrite: bool = False, resolve: bool = True
+) -> Path:
+    """Normalize ``path`` and reject an existing output unless overwrite is allowed.
+
+    When ``resolve`` is ``True`` (default), expand the user and resolve symlinks. When
+    ``False``, expand the user and make the path absolute without walking the
+    filesystem.
+    """
+    if not isinstance(resolve, bool):
+        raise TypeError(f"`resolve` must be a boolean, got {type(resolve).__name__}")
+    if not isinstance(allow_overwrite, bool):
+        raise TypeError(
+            f"`allow_overwrite` must be a boolean, got {type(allow_overwrite).__name__}"
+        )
+    if resolve:
+        normalized = resolve_path(path)
+    else:
+        if not isinstance(path, (Path, str)):
+            raise ValueError(f"`path` must be a Path or str, got {type(path).__name__}")
+        normalized = Path(path).expanduser().absolute()
+    if normalized.exists() and normalized.is_dir():
+        raise ValueError(f"Output path points to an existing directory: {normalized}")
+    if normalized.exists() and not allow_overwrite:
+        raise FileExistsError(
+            f"Path already exists and allow_overwrite=False: {normalized}"
+        )
+    return normalized
 
 
 def require_mapping(value: Any, label: str) -> dict[str, Any]:

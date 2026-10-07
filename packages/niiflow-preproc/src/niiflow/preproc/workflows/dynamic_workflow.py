@@ -60,8 +60,9 @@ class DynamicProcessingWorkflow(
     plan / execute / from-plan modes, use :func:`dynamic_workflow`.
 
     Notes:
-        ``from_file`` with ``strict: false`` keeps listed paths without checking
-        that they exist on disk. Existence is deferred to staging or execution.
+        ``from_file`` with ``must_exist: false`` keeps listed paths without
+        checking that they exist on disk. ``resolve: false`` keeps them as
+        written. Existence and realpath can be deferred to staging.
 
     Args:
         pipeline_params: Pipeline specification attached to entries before
@@ -157,13 +158,20 @@ class DynamicProcessingWorkflow(
             the preprocessing pipeline. When ``pipeline_params`` is a sequence,
             ``search`` inputs are rejected and the sequence must align
             one-to-one with the collected active files.
+
+            Staging is called with ``resolve_actives=False`` because discovery
+            already produced paths in their intended form (explicit and search
+            paths are realpathed; ``from_file`` follows ``resolve`` /
+            ``must_exist``). Entry ids therefore follow the discovered paths.
         """
         active_files = self.collect_active_files(
             inputs,
             save_to=save_filepaths_to,
             allow_search=not self._per_entry_pipeline_params,
         )
-        return self.stage_active_files(active_files, save_to=save_plan_to)
+        return self.stage_active_files(
+            active_files, save_to=save_plan_to, resolve_actives=False
+        )
 
     @staticmethod
     def process_single(entry: StagedEntry) -> None:
