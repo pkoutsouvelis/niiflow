@@ -2,7 +2,7 @@
 
 from .file_stager import FileStager
 from .table_stager import TableStager
-from .utility import EnsureActivesExist, EnsureActiveExists
+from .utility import ActiveStager, EnsureActiveExists
 from .dynamic_referencing import (
     DynamicReferenceError,
     ResolveActiveReferences,
@@ -45,7 +45,7 @@ from .types import (
 __all__ = [
     "FileStager",
     "TableStager",
-    "EnsureActivesExist",
+    "ActiveStager",
     "EnsureActiveExists",
     "DynamicReferenceError",
     "ResolveActiveReferences",

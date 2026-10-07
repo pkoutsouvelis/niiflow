@@ -536,18 +536,25 @@ class TestStageActiveFiles:
             ["first", "second"],
         ]
 
-    def test_allows_missing_active_without_ensure_stager(self, tmp_path: Path) -> None:
+    def test_must_exist_false_allows_missing_active(self, tmp_path: Path) -> None:
         wf = StagingWorkflow(
             logs_root=tmp_path / "logs",
             entry_params={"subject": "{active.stem}"},
         )
         missing = tmp_path / "planned" / "img.nii.gz"
 
-        plan = wf.stage_active_files([missing])
+        plan = wf.stage_active_files([missing], must_exist=False)
 
         assert len(plan.entries) == 1
         assert plan.entries[0].active == missing.resolve()
         assert plan.entries[0].params["subject"] == "img.nii"
+
+    def test_must_exist_raises_on_missing_active(self, tmp_path: Path) -> None:
+        wf = StagingWorkflow(logs_root=tmp_path / "logs")
+        missing = tmp_path / "planned" / "img.nii.gz"
+
+        with pytest.raises(FileNotFoundError, match="does not exist"):
+            wf.stage_active_files([missing])
 
     def test_resolve_actives_false_keeps_symlink(self, tmp_path: Path) -> None:
         wf = StagingWorkflow(logs_root=tmp_path / "logs")

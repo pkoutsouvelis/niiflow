@@ -600,28 +600,19 @@ class TestSearchInputs:
         second = stager.get_explorer(search)
         assert first is second
 
-    def test_resolve_actives_false_does_not_realpath_anchor(
-        self, bids_tree: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+    def test_uses_entry_active_as_stored_without_realpath(
+        self, bids_tree: dict[str, Path]
     ) -> None:
         target = bids_tree["active"]
         link = target.parent / "alias.nii.gz"
         link.symlink_to(target)
-        resolved_paths: list[Path] = []
-        real_resolve = Path.resolve
-
-        def _resolve(self: Path, *args: Any, **kwargs: Any) -> Path:
-            resolved_paths.append(Path(self))
-            return real_resolve(self, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "resolve", _resolve)
-        stager = FileStager({"output": "output"}, resolve_actives=False)
+        stager = FileStager({"output": "output"})
         entry = make_entries([link], {"output": "out.nii.gz"}, resolve_actives=False)[0]
 
         staged = stager.stage_single(entry)
 
         assert staged.active == link.absolute()
-        assert link.absolute() not in resolved_paths
-        assert link not in resolved_paths
+        assert Path(staged.params["output"]) == link.parent / "out.nii.gz"
 
     def test_reuses_search_results_for_same_spec_and_root(
         self,

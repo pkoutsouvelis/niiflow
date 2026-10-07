@@ -43,7 +43,7 @@ class RecordingStager(Stager):
     """Records which actives were staged; optionally fails on a marker param."""
 
     def __init__(self, *, allow_failed_entries: bool = False) -> None:
-        self.allow_failed_entries = allow_failed_entries
+        super().__init__(allow_failed_entries=allow_failed_entries)
         self.seen: list[Path] = []
 
     def stage_single(self, entry: StagedEntry) -> StagedEntry:
@@ -174,18 +174,29 @@ class TestMakeEntries:
         with pytest.raises(ValueError, match="non-empty"):
             make_entries([], {"input": None})
 
-    def test_allows_missing_active_file(self, tmp_path: Path) -> None:
+    def test_must_exist_raises_on_missing_active(self, tmp_path: Path) -> None:
         missing = tmp_path / "missing.nii.gz"
-        entries = make_entries([missing], {"label": "x"})
+        with pytest.raises(FileNotFoundError, match="does not exist"):
+            make_entries([missing], {"label": "x"})
+
+    def test_must_exist_false_allows_missing_active(self, tmp_path: Path) -> None:
+        missing = tmp_path / "missing.nii.gz"
+        entries = make_entries([missing], {"label": "x"}, must_exist=False)
         assert len(entries) == 1
         assert entries[0].active == missing.resolve()
         assert entries[0].id == str(missing.resolve())
         assert entries[0].params == {"label": "x"}
 
-    def test_allows_directory_active_path(self, tmp_path: Path) -> None:
+    def test_must_exist_raises_on_directory_active(self, tmp_path: Path) -> None:
         directory = tmp_path / "folder"
         directory.mkdir()
-        entry = make_entries([directory], {"input": None})[0]
+        with pytest.raises(ValueError, match="not a file"):
+            make_entries([directory], {"input": None})
+
+    def test_must_exist_false_allows_directory_active(self, tmp_path: Path) -> None:
+        directory = tmp_path / "folder"
+        directory.mkdir()
+        entry = make_entries([directory], {"input": None}, must_exist=False)[0]
 
         assert entry.active == directory.resolve()
         assert entry.id == str(directory.resolve())
@@ -203,7 +214,7 @@ class TestMakeEntries:
         assert unresolved.active == symlink.absolute()
         assert unresolved.id == str(symlink.absolute())
 
-    def test_does_not_call_exists_or_is_file(
+    def test_must_exist_false_skips_exists_and_is_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         active = tmp_path / "unchecked.nii.gz"
@@ -214,7 +225,7 @@ class TestMakeEntries:
         monkeypatch.setattr(Path, "exists", _unexpected_check)
         monkeypatch.setattr(Path, "is_file", _unexpected_check)
 
-        entry = make_entries([active], {})[0]
+        entry = make_entries([active], {}, must_exist=False)[0]
         assert entry.active == active.resolve()
 
     def test_rejects_mismatched_per_entry_param_lengths(

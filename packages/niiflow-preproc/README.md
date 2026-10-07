@@ -304,9 +304,10 @@ Registered names for `stager_name` (via `create_stager` / `staging_params`):
 
 - `FileStager` — resolve input/output file pointers around the active path
 (`pointers`, `ensure_inputs_exist`, `allow_overwrite`, `allow_failed_entries`).
-- `EnsureActivesExist` — require each entry's active path to exist and be a
-file (`allow_failed_entries`). Place it in the chain when actives may be
-invented mid-staging; the default discovery path already yields real files.
+- `ActiveStager` — normalize each entry's active (`resolve`, `must_exist`,
+`allow_failed_entries`). Place it in the chain when actives may be invented
+mid-staging or need realpath/existence checks; other stagers leave the active
+as stored. (`EnsureActiveExists` is a deprecated alias removed in v0.5.0.)
 - `ResolveActiveReferences` / `ResolveParamReferences` — expand
 `{active.*}` then leftover `{params.*}` references. Provided workflows always
 bookend the configured chain with these (even when `staging_params` is
@@ -525,7 +526,7 @@ niiflow-preproc/
     │   ├── stager_factory.py         # create_stager / discovery
     │   ├── search.py                 # parent_up / parent_match / mirror_root
     │   ├── dynamic_referencing.py    # {active.*} / {params...} reference resolution
-    │   ├── utility.py                # EnsureActivesExist and other utility stagers
+    │   ├── utility.py                # ActiveStager and other utility stagers
     │   ├── validation.py
     │   └── types.py                  # Root/Input/Output spec types
     ├── pipelines/

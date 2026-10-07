@@ -269,9 +269,7 @@ class SupportsStaging:
     :class:`~niiflow.preproc.staging.ResolveActiveReferences` and
     :class:`~niiflow.preproc.staging.ResolveParamReferences` (even when
     ``staging_params`` is ``None``), so ``{active.*}`` / leftover ``{params.*}``
-    in ``entry_params`` are expanded consistently. Active existence is not
-    enforced here; place
-    :class:`~niiflow.preproc.staging.EnsureActivesExist` in the chain when needed.
+    in ``entry_params`` are expanded consistently.
 
     ``staging_workers`` is the thread count used by :meth:`stage_active_files`
     (default ``1``, serial).
@@ -361,6 +359,7 @@ class SupportsStaging:
         *,
         save_to: Path | str | None = None,
         resolve_actives: bool = True,
+        must_exist: bool = True,
     ) -> RunPlan:
         """Stage active files into a :class:`~niiflow.preproc.workflows.plan.RunPlan`.
 
@@ -371,10 +370,14 @@ class SupportsStaging:
             resolve_actives: When ``True`` (default), realpath each active while
                 building entries (and therefore entry ids from those paths).
                 When ``False``, keep an absolute path without symlink
-                resolution. Each stager still has its own ``resolve_actives``
-                for the anchor it receives (default ``True``). Callers that
-                already canonicalized actives (for example after input
-                discovery) should pass ``False`` to avoid a second realpath.
+                resolution. Callers that already canonicalized actives (for
+                example after input discovery) should pass ``False`` to avoid a
+                second realpath. Other stagers do not re-normalize actives;
+                place :class:`~niiflow.preproc.staging.ActiveStager` in the
+                chain when mid-staging standardization is needed.
+            must_exist: When ``True`` (default), each active must exist and be
+                a file when entries are built. When ``False``, paths are kept
+                without an existence check.
 
         Returns:
             A run plan containing one staged entry per active file.
@@ -382,6 +385,10 @@ class SupportsStaging:
         if not isinstance(resolve_actives, bool):
             raise TypeError(
                 f"`resolve_actives` must be a boolean, got {type(resolve_actives).__name__}"
+            )
+        if not isinstance(must_exist, bool):
+            raise TypeError(
+                f"`must_exist` must be a boolean, got {type(must_exist).__name__}"
             )
         log = getattr(self, "log", None)
         if not callable(log):
@@ -392,7 +399,10 @@ class SupportsStaging:
             )
         log(f"Staging {len(active_files)} entries...")
         entries = make_entries(
-            active_files, self._entry_params, resolve_actives=resolve_actives
+            active_files,
+            self._entry_params,
+            resolve_actives=resolve_actives,
+            must_exist=must_exist,
         )
         num_workers = self._staging_workers
         for stager in self._stagers:

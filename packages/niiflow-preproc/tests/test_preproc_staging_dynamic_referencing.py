@@ -363,6 +363,7 @@ class TestReferenceStagers:
         entry = make_entries(
             [missing],
             {"subject": "{active.stem}", "dir": "{active.parent}"},
+            must_exist=False,
         )[0]
         staged = ResolveActiveReferences().stage([entry])[0]
         assert staged.params["subject"] == "sub-01_T1w.nii"

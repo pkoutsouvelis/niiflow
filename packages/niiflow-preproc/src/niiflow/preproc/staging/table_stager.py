@@ -15,7 +15,6 @@ from pathlib import Path
 from niiflow.preproc.utils.file import get_ext, resolve_path
 from niiflow.preproc.utils.misc import get_by_dotted_path, set_by_dotted_path
 from .stager import FileStagingError, StagedEntry, Stager
-from .validation import ensure_file
 
 
 class TableStager(Stager):
@@ -51,9 +50,6 @@ class TableStager(Stager):
         allow_failed_entries: When ``False``, the first staging error aborts
             :meth:`stage`. When ``True``, the error is recorded and staging
             continues.
-        resolve_actives: When ``True`` (default), realpath the incoming active
-            before matching a table row. When ``False``, match against the
-            stored active path.
     """
 
     def __init__(
@@ -64,8 +60,8 @@ class TableStager(Stager):
         *,
         id_pattern: str | None = None,
         allow_failed_entries: bool = False,
-        resolve_actives: bool = True,
     ) -> None:
+        super().__init__(allow_failed_entries=allow_failed_entries)
         if not isinstance(id_column, str) or not id_column:
             raise ValueError("`id_column` must be a non-empty string.")
         if id_pattern is not None and (
@@ -77,8 +73,6 @@ class TableStager(Stager):
         self.id_column = id_column
         self.pointers = _validate_pointers(pointers)
         self.id_pattern = id_pattern
-        self.allow_failed_entries = bool(allow_failed_entries)
-        self.resolve_actives = bool(resolve_actives)
 
         if self.id_pattern is None:
             self._id_before = ""
@@ -96,10 +90,7 @@ class TableStager(Stager):
         out_params = deepcopy(entry.params)
         current_pointer: str | None = None
         try:
-            active = ensure_file(
-                entry.active, must_exist=False, resolve=self.resolve_actives
-            )
-            row = self._match_row(active)
+            row = self._match_row(entry.active)
             for pointer in self.pointers:
                 current_pointer = pointer
                 column = get_by_dotted_path(out_params, pointer)

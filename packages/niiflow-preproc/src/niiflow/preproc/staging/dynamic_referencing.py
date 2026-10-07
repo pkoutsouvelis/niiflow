@@ -17,7 +17,6 @@ from typing import Any, TypeVar
 
 from niiflow.preproc.utils.misc import get_by_dotted_path, split_dotted_path
 from .stager import StagingContext, StagedEntry, Stager
-from .validation import ensure_file
 
 T = TypeVar("T")
 
@@ -341,10 +340,7 @@ class ResolveActiveReferences(Stager):
     def stage_single(self, entry: StagedEntry) -> StagedEntry:
         if entry.errors:
             return entry
-        active = ensure_file(
-            entry.active, must_exist=False, resolve=self.resolve_actives
-        )
-        ctx = StagingContext(active=active)
+        ctx = StagingContext(active=entry.active)
         params = deepcopy(entry.params)
         params = resolve_dynamic_refs(
             params,
@@ -366,10 +362,7 @@ class ResolveParamReferences(Stager):
     def stage_single(self, entry: StagedEntry) -> StagedEntry:
         if entry.errors:
             return entry
-        active = ensure_file(
-            entry.active, must_exist=False, resolve=self.resolve_actives
-        )
-        ctx = StagingContext(active=active)
+        ctx = StagingContext(active=entry.active)
         params = deepcopy(entry.params)
         params = resolve_dynamic_refs(
             params,

@@ -111,11 +111,6 @@ class FileStager(Stager):
             When ``False``, the first staging error aborts :meth:`stage`. When
             ``True``, the error is recorded on the returned entry and staging
             continues with the remaining entries.
-
-        resolve_actives:
-            When ``True`` (default), realpath the incoming active before using
-            it as an anchor. When ``False``, keep the active path as stored on
-            the entry (expanded to an absolute path without symlink resolution).
     """
 
     def __init__(
@@ -125,13 +120,11 @@ class FileStager(Stager):
         ensure_inputs_exist: bool = True,
         allow_overwrite: bool = True,
         allow_failed_entries: bool = False,
-        resolve_actives: bool = True,
     ) -> None:
+        super().__init__(allow_failed_entries=allow_failed_entries)
         self.pointers = validate_pointers(pointers)
         self.ensure_inputs_exist = bool(ensure_inputs_exist)
         self.allow_overwrite = bool(allow_overwrite)
-        self.allow_failed_entries = bool(allow_failed_entries)
-        self.resolve_actives = bool(resolve_actives)
 
         self._explorer_cache: dict[tuple[Any, ...], Any] = {}
         self._explorer_lock = Lock()
@@ -152,10 +145,7 @@ class FileStager(Stager):
         current_kind: PointerKind | None = None
 
         try:
-            active = ensure_file(
-                entry.active, must_exist=False, resolve=self.resolve_actives
-            )
-            ctx = StagingContext(active=active)
+            ctx = StagingContext(active=entry.active)
 
             # Inputs first: expand params refs on each input spec, then materialize.
             for pointer, kind in self.pointers.items():

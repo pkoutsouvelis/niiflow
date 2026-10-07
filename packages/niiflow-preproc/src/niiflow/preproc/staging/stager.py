@@ -138,15 +138,12 @@ class Stager(ABC):
     A ``stage_single`` implementation may preserve, replace, or omit an entry ID. After
     :meth:`stage` returns, every entry has a non-empty ID unique within the returned
     collection.
-
-    :attr:`resolve_actives` controls whether this stager realpaths the incoming active
-    before using it as an anchor. It defaults to ``True``. Stagers that mint new actives
-    should resolve those paths themselves before returning them; this flag only applies
-    to the active the stager was given.
     """
 
     allow_failed_entries: bool = False
-    resolve_actives: bool = True
+
+    def __init__(self, *, allow_failed_entries: bool = False) -> None:
+        self.allow_failed_entries = bool(allow_failed_entries)
 
     def stage(
         self, entries: Sequence[StagedEntry], *, num_workers: int = 1
@@ -281,12 +278,14 @@ class Stager(ABC):
         params: dict[str, Any] | Sequence[dict[str, Any]],
         *,
         resolve_actives: bool = True,
+        must_exist: bool = True,
     ) -> list[StagedEntry]:
         """Create entries from active files and shared/per-entry params."""
         return make_entries(
             active_files,
             params,
             resolve_actives=resolve_actives,
+            must_exist=must_exist,
         )
 
     @abstractmethod
@@ -320,6 +319,7 @@ def make_entries(
     params: dict[str, Any] | Sequence[dict[str, Any]],
     *,
     resolve_actives: bool = True,
+    must_exist: bool = True,
 ) -> list[StagedEntry]:
     """Create :class:`StagedEntry` objects from active files and parameter specs.
 
@@ -327,11 +327,14 @@ def make_entries(
     staged unit and IDs are disambiguated deterministically.
 
     When ``resolve_actives`` is ``True`` (default), active paths are expanded and
-    resolved to absolute paths. When ``False``, paths are expanded and converted to
-    absolute paths without filesystem resolution.
+    realpathed. When ``False``, paths are expanded and made absolute without
+    symlink resolution. Absolute paths are typical for informative entry IDs;
+    relative actives are allowed elsewhere when callers skip this helper.
 
-    No filesystem existence/type checks are performed here. Use staging utilities
-    such as :class:`EnsureActivesExist` when physical-path validation is required.
+    When ``must_exist`` is ``True`` (default), each active must exist and be a
+    file. When ``False``, paths are kept without an existence check. Prefer
+    :class:`~niiflow.preproc.staging.utility.ActiveStager` when the same policy
+    should run inside a staging chain.
 
     If ``params`` is a dictionary, it is deep-copied for each entry. If ``params`` is
     a sequence, it must align one-to-one with ``active_files`` and each mapping is
@@ -345,12 +348,17 @@ def make_entries(
             f"`resolve_actives` must be a boolean, got "
             f"{type(resolve_actives).__name__}"
         )
+    if not isinstance(must_exist, bool):
+        raise TypeError(
+            f"`must_exist` must be a boolean, got {type(must_exist).__name__}"
+        )
 
-    actives = []
-    for item in active_files:
-        active = Path(item).expanduser()
-        active = active.resolve() if resolve_actives else active.absolute()
-        actives.append(active)
+    from .validation import ensure_file
+
+    actives = [
+        ensure_file(item, must_exist=must_exist, resolve=resolve_actives)
+        for item in active_files
+    ]
 
     if isinstance(params, dict):
         entry_params: Sequence[dict[str, Any]] = [params] * len(actives)
