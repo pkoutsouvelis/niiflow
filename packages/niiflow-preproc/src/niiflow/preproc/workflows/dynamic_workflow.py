@@ -170,7 +170,10 @@ class DynamicProcessingWorkflow(
             allow_search=not self._per_entry_pipeline_params,
         )
         return self.stage_active_files(
-            active_files, save_to=save_plan_to, resolve_actives=False
+            active_files,
+            save_to=save_plan_to,
+            resolve_actives=False,
+            must_exist=False,
         )
 
     @staticmethod
