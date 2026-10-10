@@ -111,6 +111,69 @@ class TestQCStagePersistence:
             )
 
 
+class TestRaiseOnFail:
+    def test_spacing_raises_on_fail(self, tmp_path: Path) -> None:
+        stage = make_stage(CheckVoxelSpacing, tmp_path)
+        image = SimpleNamespace(spacing=(2.0, 2.0, 2.0))
+        with pytest.raises(
+            RuntimeError,
+            match=r"CheckVoxelSpacing failed QC.*value=\(2\.0, 2\.0, 2\.0\)",
+        ):
+            stage.forward(
+                image=image,
+                expected=(1.0, 1.0, 1.0),
+                raise_on_fail=True,
+            )
+
+    def test_dimensions_raises_on_fail(self, tmp_path: Path) -> None:
+        stage = make_stage(CheckDimensions, tmp_path)
+        image = SimpleNamespace(shape=(32, 32, 32))
+        with pytest.raises(
+            RuntimeError, match=r"CheckDimensions failed QC.*value=\(32, 32, 32\)"
+        ):
+            stage.forward(
+                image=image,
+                expected=(64, 64, 64),
+                raise_on_fail=True,
+            )
+
+    def test_similarity_raises_on_fail(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "niiflow.preproc.pipelines.pipeline_stages.qc.ants_similarity_metrics",
+            lambda *a, **k: {"correlation": 0.1},
+        )
+        stage = make_stage(CheckImageSimilarity, tmp_path)
+        with pytest.raises(
+            RuntimeError,
+            match=r"CheckImageSimilarity failed QC.*value=\{'correlation': 0\.1\}",
+        ):
+            stage.forward(
+                image=object(),
+                target=object(),
+                correlation=0.5,
+                raise_on_fail=True,
+            )
+
+    def test_default_allows_soft_fail(self, tmp_path: Path) -> None:
+        stage = make_stage(CheckVoxelSpacing, tmp_path)
+        image = SimpleNamespace(spacing=(2.0, 2.0, 2.0))
+        out = stage.forward(image=image, expected=(1.0, 1.0, 1.0))
+        assert out["passed"] is False
+
+    def test_raise_on_fail_skips_when_passed(self, tmp_path: Path) -> None:
+        stage = make_stage(CheckVoxelSpacing, tmp_path)
+        image = SimpleNamespace(spacing=(1.0, 1.0, 1.0))
+        out = stage.forward(image=image, expected=(1.0, 1.0, 1.0), raise_on_fail=True)
+        assert out["passed"] is True
+
+    def test_rejects_non_bool_raise_on_fail(self, tmp_path: Path) -> None:
+        stage = make_stage(CheckVoxelSpacing, tmp_path)
+        with pytest.raises(TypeError, match="raise_on_fail"):
+            stage.load_param("raise_on_fail", "yes")
+
+
 class TestQCStageReport:
     def test_forward_report_omits_id_when_none(self, tmp_path: Path) -> None:
         stage = make_stage(CheckVoxelSpacing, tmp_path)

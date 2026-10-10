@@ -69,6 +69,8 @@ class CheckVoxelSpacing(PipelineStage):
       (requires stage ``verbose=True``).
     * ``id`` — optional string included in ``report`` when set (e.g.
       ``"ctx.run_id"``); omitted from ``report`` when ``None``.
+    * ``raise_on_fail`` — when ``True``, raise from :meth:`forward` if
+      ``passed`` is ``False`` (default ``False``).
 
     **Outputs** (from :meth:`forward`):
 
@@ -115,6 +117,13 @@ class CheckVoxelSpacing(PipelineStage):
                 raise TypeError(f"`log` must be a boolean, got {type(value).__name__}")
             return value
 
+        if key == "raise_on_fail":
+            if not isinstance(value, bool):
+                raise TypeError(
+                    f"`raise_on_fail` must be a boolean, got {type(value).__name__}"
+                )
+            return value
+
         if key == "id":
             if value is None:
                 return None
@@ -156,6 +165,11 @@ class CheckVoxelSpacing(PipelineStage):
         }
         if id is not None:
             report["id"] = id
+        if params.get("raise_on_fail", False) and not passed:
+            raise RuntimeError(
+                f"{type(self).__name__} failed QC check (passed=False) "
+                f"with value={value}"
+            )
         return {"passed": passed, "value": value, "report": report}
 
     def save_output(self, key: str, value: Any, output_path: Path) -> Path:
@@ -181,6 +195,8 @@ class CheckDimensions(PipelineStage):
       (requires stage ``verbose=True``).
     * ``id`` — optional string included in ``report`` when set (e.g.
       ``"ctx.run_id"``); omitted from ``report`` when ``None``.
+    * ``raise_on_fail`` — when ``True``, raise from :meth:`forward` if
+      ``passed`` is ``False`` (default ``False``).
 
     **Outputs** (from :meth:`forward`):
 
@@ -227,6 +243,13 @@ class CheckDimensions(PipelineStage):
                 raise TypeError(f"`log` must be a boolean, got {type(value).__name__}")
             return value
 
+        if key == "raise_on_fail":
+            if not isinstance(value, bool):
+                raise TypeError(
+                    f"`raise_on_fail` must be a boolean, got {type(value).__name__}"
+                )
+            return value
+
         if key == "id":
             if value is None:
                 return None
@@ -268,6 +291,11 @@ class CheckDimensions(PipelineStage):
         }
         if id is not None:
             report["id"] = id
+        if params.get("raise_on_fail", False) and not passed:
+            raise RuntimeError(
+                f"{type(self).__name__} failed QC check (passed=False) "
+                f"with value={value}"
+            )
         return {"passed": passed, "value": value, "report": report}
 
     def save_output(self, key: str, value: Any, output_path: Path) -> Path:
@@ -306,6 +334,8 @@ class CheckImageSimilarity(PipelineStage):
       ``verbose=True``).
     * ``id`` — optional string included in ``report`` when set; omitted when
       ``None``.
+    * ``raise_on_fail`` — when ``True``, raise from :meth:`forward` if
+      ``passed`` is ``False`` (default ``False``).
 
     **Outputs** (from :meth:`forward`):
 
@@ -380,6 +410,13 @@ class CheckImageSimilarity(PipelineStage):
                 raise TypeError(f"`log` must be a boolean, got {type(value).__name__}")
             return value
 
+        if key == "raise_on_fail":
+            if not isinstance(value, bool):
+                raise TypeError(
+                    f"`raise_on_fail` must be a boolean, got {type(value).__name__}"
+                )
+            return value
+
         if key == "id":
             if value is None:
                 return None
@@ -430,6 +467,11 @@ class CheckImageSimilarity(PipelineStage):
         }
         if id is not None:
             report["id"] = id
+        if params.get("raise_on_fail", False) and not passed:
+            raise RuntimeError(
+                f"{type(self).__name__} failed QC check (passed=False) "
+                f"with value={scores}"
+            )
         return {"passed": passed, "value": scores, "report": report}
 
     def save_output(self, key: str, value: Any, output_path: Path) -> Path:
