@@ -128,8 +128,9 @@ dynamic_pipeline(
 `ANTsPreprocessBrainImage`, `ANTsRegistration`, `ANTsApplyTransforms`, `ANTsResample`,
 `ANTsResampleToTarget`, `Reorient`, `ClampIntensities`, `MinmaxNorm`, `ZTransformNorm`,
 `PointwiseArithmetic`, `CenterCrop`, `CenterPad`, `CropToMask`, `CropToRange`,
-`PadToRange`, `CheckDimensions`, `CheckVoxelSpacing`, `ApplyMask`, `SmoothMask`,
-`RelabelMask`, `ToNumpy`, `GetImage`, `Rename`, `Delete`, `SyncMetadata`.
+`PadToRange`, `CheckDimensions`, `CheckVoxelSpacing`, `ApplyMask`, `ANTsThreshold`,
+`ComposeMasks`, `SmoothMask`, `RelabelMask`, `ToNumpy`, `ToANTs`, `GetImage`,
+`Rename`, `Delete`, `SyncMetadata`.
 
 ---
 
@@ -544,8 +545,8 @@ niiflow-preproc/
     │       ├── intensity_normalization.py  # Clamp / Minmax / ZTransform
     │       ├── croppad.py            # CenterCrop / CenterPad / Crop/Pad-to-range
     │       ├── qc.py                 # CheckDimensions / CheckVoxelSpacing
-    │       ├── masks.py              # ApplyMask / SmoothMask / RelabelMask
-    │       ├── utility.py            # Reorient / ToNumpy / GetImage / Rename / Delete / SyncMetadata
+    │       ├── masks.py              # ApplyMask / ANTsThreshold / ComposeMasks / SmoothMask / RelabelMask
+    │       ├── utility.py            # Reorient / ToNumpy / ToANTs / GetImage / Rename / Delete / SyncMetadata
     │       └── pipelines.py          # ANTsPreprocessBrainImage
     ├── workflows/
     │   ├── workflow.py               # ProcessingWorkflow (execution engine)

@@ -16,7 +16,13 @@ from .intensity_normalization import (
     minmax_norm,
     z_transform_norm,
 )
-from .masks import ants_apply_mask, relabel_mask, smooth_mask
+from .masks import (
+    ants_apply_mask,
+    ants_threshold,
+    compose_masks,
+    relabel_mask,
+    smooth_mask,
+)
 from .metadata import sync_ants_metadata
 from .pipelines import ants_preprocess_brain_image
 from .registration import (
@@ -44,6 +50,8 @@ __all__ = [
     "center_pad",
     "ants_denoise",
     "ants_apply_mask",
+    "ants_threshold",
+    "compose_masks",
     "smooth_mask",
     "relabel_mask",
     "ants_preprocess_brain_image",

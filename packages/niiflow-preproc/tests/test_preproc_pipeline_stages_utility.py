@@ -8,13 +8,17 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
+from niiflow.preproc.functional.image.utils import ants_to_numpy_with_metadata
 from niiflow.preproc.pipelines.pipeline_stages import (
     GetImage,
     Rename,
     RuntimeContext,
     SyncMetadata,
+    ToANTs,
+    ToNumpy,
 )
 from test_preproc_pipeline_stages_base import STEP_ID, step_ctx, touch
 
@@ -150,6 +154,86 @@ class TestGetImage:
         stage = GetImage(params={"image": image})
         with pytest.raises(ValueError, match=r"\.nii"):
             stage.save_output("out_image", image, tmp_path / "out.txt")
+
+
+# ---------------------------------------------------------------------------
+# ToANTs — reconstruct an image from an array and ToNumpy metadata.
+# ---------------------------------------------------------------------------
+
+
+class TestToANTs:
+    def test_reconstructs_with_metadata_cast_and_save(self, tmp_path: Path) -> None:
+        ants = pytest.importorskip("ants")
+        reference = ants.from_numpy(
+            np.zeros((2, 3), dtype=np.float32),
+            origin=(4.0, 5.0),
+            spacing=(0.5, 2.0),
+        )
+        array = np.arange(6, dtype=np.float64).reshape(2, 3)
+        _, metadata = ants_to_numpy_with_metadata(reference)
+        out_path = tmp_path / "reconstructed.nii.gz"
+        stage = ToANTs(
+            params={
+                "array": array,
+                "metadata": metadata,
+                "dtype": "uint8",
+            },
+            save_outputs={"out_image": str(out_path)},
+        )
+        out = stage.run(step_ctx("to_ants")).outputs["to_ants"]["out_image"]
+        np.testing.assert_array_equal(out.numpy(), array.astype(np.uint8))
+        assert out.numpy().dtype == np.uint8
+        assert out.origin == reference.origin
+        assert out.spacing == reference.spacing
+        assert out_path.is_file()
+
+    def test_loads_array_from_npy(self, tmp_path: Path) -> None:
+        ants = pytest.importorskip("ants")
+        array = np.arange(4, dtype=np.float32).reshape(2, 2)
+        array_path = tmp_path / "array.npy"
+        np.save(array_path, array)
+        reference = ants.from_numpy(np.zeros_like(array))
+        _, metadata = ants_to_numpy_with_metadata(reference)
+        stage = ToANTs(
+            params={
+                "array": str(array_path),
+                "metadata": metadata,
+            }
+        )
+        out = stage.run(step_ctx("to_ants")).outputs["to_ants"]["out_image"]
+        np.testing.assert_array_equal(out.numpy(), array)
+
+    def test_round_trips_saved_to_numpy_outputs(self, tmp_path: Path) -> None:
+        ants = pytest.importorskip("ants")
+        image = ants.from_numpy(
+            np.arange(8, dtype=np.float32).reshape(2, 2, 2),
+            origin=(1.0, 2.0, 3.0),
+            spacing=(0.5, 1.0, 2.0),
+        )
+        array_path = tmp_path / "array.npy"
+        metadata_path = tmp_path / "metadata.json"
+        ToNumpy(
+            params={"image": image, "dtype": "float32"},
+            save_outputs={
+                "array": str(array_path),
+                "metadata": str(metadata_path),
+            },
+        ).run(step_ctx("to_numpy"))
+
+        out = (
+            ToANTs(params={"array": str(array_path), "metadata": str(metadata_path)})
+            .run(step_ctx("to_ants"))
+            .outputs["to_ants"]["out_image"]
+        )
+
+        np.testing.assert_array_equal(out.numpy(), image.numpy())
+        assert out.origin == image.origin
+        assert out.spacing == image.spacing
+        np.testing.assert_array_equal(out.direction, image.direction)
+
+    def test_requires_metadata(self) -> None:
+        with pytest.raises(ValueError, match=r"Missing required parameter\(s\)"):
+            ToANTs(params={"array": np.zeros((2, 2))})
 
 
 # ---------------------------------------------------------------------------

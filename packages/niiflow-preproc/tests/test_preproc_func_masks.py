@@ -5,7 +5,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from niiflow.preproc.functional.array.masks import relabel_mask, smooth_mask
+from niiflow.preproc.functional.array.masks import (
+    compose_masks,
+    relabel_mask,
+    smooth_mask,
+)
 
 
 @pytest.fixture
@@ -114,7 +118,127 @@ class TestRelabelMask:
             relabel_mask(mask, {})
 
 
+class TestComposeMasks:
+    def test_or_preserves_non_conflicting_labels(self) -> None:
+        first = np.array([[0, 2], [0, 3]], dtype=np.int16)
+        second = np.array([[1, 0], [0, 3]], dtype=np.uint8)
+        out = compose_masks([first, second], operator="OR")
+        np.testing.assert_array_equal(out, np.array([[1, 2], [0, 3]]))
+        assert out.dtype == np.result_type(first.dtype, second.dtype)
+
+    def test_and_keeps_only_shared_non_zero_indices(self) -> None:
+        first = np.array([[1, 2], [0, 3]], dtype=np.int16)
+        second = np.array([[1, 0], [4, 3]], dtype=np.int16)
+        out = compose_masks([first, second], operator="and")
+        np.testing.assert_array_equal(out, np.array([[1, 0], [0, 3]]))
+
+    def test_rejects_conflicting_non_zero_labels(self) -> None:
+        first = np.array([0, 1, 2], dtype=np.int16)
+        second = np.array([3, 1, 4], dtype=np.int16)
+        with pytest.raises(ValueError, match="conflicting non-zero values"):
+            compose_masks([first, second], operator="OR")
+
+    def test_rejects_different_shapes(self) -> None:
+        with pytest.raises(ValueError, match="same shape"):
+            compose_masks([np.zeros((2, 2), dtype=int), np.zeros((2, 3), dtype=int)])
+
+    def test_rejects_non_integral_values(self) -> None:
+        with pytest.raises(ValueError, match="integer-valued"):
+            compose_masks(
+                [
+                    np.array([0.0, 0.5]),
+                    np.array([0.0, 1.0]),
+                ]
+            )
+
+    def test_rejects_unknown_operator(self) -> None:
+        masks = [np.array([0, 1]), np.array([1, 1])]
+        with pytest.raises(ValueError, match="operator"):
+            compose_masks(masks, operator="XOR")  # type: ignore[arg-type]
+
+
 class TestImageMasks:
+    def test_ants_threshold_forwards_parameters_and_adds_epsilon(
+        self, ants_mod, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from niiflow.preproc.functional.image.masks import ants_threshold
+
+        image = ants_mod.from_numpy(np.array([[0.0, 1.0]], dtype=np.float32))
+        calls: list[dict] = []
+
+        def fake_threshold_image(*args, **kwargs):
+            calls.append({"args": args, "kwargs": kwargs})
+            return image
+
+        monkeypatch.setattr(
+            "niiflow.preproc.functional.image.masks.threshold_image",
+            fake_threshold_image,
+        )
+        out = ants_threshold(
+            image,
+            low_thresh=0.0,
+            high_thresh=2.0,
+            inval=5,
+            outval=-1,
+            binary=False,
+            inclusive=True,
+        )
+        assert out is image
+        assert calls[0]["args"] == (image,)
+        assert calls[0]["kwargs"]["low_thresh"] > 0.0
+        assert calls[0]["kwargs"]["high_thresh"] == 2.0
+        assert calls[0]["kwargs"]["inval"] == 5
+        assert calls[0]["kwargs"]["outval"] == -1
+        assert calls[0]["kwargs"]["binary"] is False
+
+    def test_ants_threshold_non_zero_values(self, ants_mod) -> None:
+        from niiflow.preproc.functional.image.masks import ants_threshold
+
+        image = ants_mod.from_numpy(
+            np.array([[0.0, 0.5], [2.0, 0.0]], dtype=np.float32)
+        )
+        out = ants_threshold(image, low_thresh=0.0, inclusive=True)
+        np.testing.assert_array_equal(out.numpy(), np.array([[0.0, 1.0], [1.0, 0.0]]))
+
+    def test_ants_threshold_inclusive_requires_low_threshold(self, ants_mod) -> None:
+        from niiflow.preproc.functional.image.masks import ants_threshold
+
+        image = ants_mod.from_numpy(np.zeros((2, 2), dtype=np.float32))
+        with pytest.raises(ValueError, match="requires `low_thresh`"):
+            ants_threshold(image, inclusive=True)
+
+    def test_compose_masks_preserves_geometry(self, ants_mod) -> None:
+        from niiflow.preproc.functional.image.masks import (
+            compose_masks as image_compose_masks,
+        )
+
+        kwargs = {"origin": (4.0, 5.0), "spacing": (1.0, 2.0)}
+        first = ants_mod.from_numpy(
+            np.array([[0, 2], [0, 3]], dtype=np.float32), **kwargs
+        )
+        second = ants_mod.from_numpy(
+            np.array([[1, 0], [0, 3]], dtype=np.float32), **kwargs
+        )
+        out = image_compose_masks([first, second], operator="OR")
+        np.testing.assert_array_equal(out.numpy(), np.array([[1, 2], [0, 3]]))
+        assert out.origin == first.origin
+        assert out.spacing == first.spacing
+        np.testing.assert_array_equal(out.direction, first.direction)
+
+    def test_compose_masks_rejects_grid_mismatch(self, ants_mod) -> None:
+        from niiflow.preproc.functional.image.masks import (
+            compose_masks as image_compose_masks,
+        )
+
+        first = ants_mod.from_numpy(
+            np.zeros((2, 2), dtype=np.float32), origin=(0.0, 0.0)
+        )
+        second = ants_mod.from_numpy(
+            np.zeros((2, 2), dtype=np.float32), origin=(1.0, 0.0)
+        )
+        with pytest.raises(ValueError, match="voxel grid"):
+            image_compose_masks([first, second])
+
     def test_smooth_mask_preserves_geometry(
         self, ants_mod, binary_cube: np.ndarray
     ) -> None:
@@ -132,6 +256,62 @@ class TestImageMasks:
         assert out.spacing == image.spacing
         np.testing.assert_array_equal(out.direction, image.direction)
         assert float(out.numpy().max()) == pytest.approx(1.0)
+
+    def test_smooth_mask_use_mm_false_uses_sigma_in_voxels(
+        self, ants_mod, binary_cube: np.ndarray
+    ) -> None:
+        from niiflow.preproc.functional.array.masks import (
+            smooth_mask as array_smooth_mask,
+        )
+        from niiflow.preproc.functional.image.masks import (
+            smooth_mask as image_smooth_mask,
+        )
+
+        image = ants_mod.from_numpy(binary_cube, spacing=(2.0, 2.0, 2.0))
+        out = image_smooth_mask(image, sigma=1.0, use_mm=False)
+        expected = array_smooth_mask(binary_cube, sigma=1.0)
+        np.testing.assert_allclose(out.numpy(), expected)
+
+    def test_smooth_mask_use_mm_rescales_sigma_by_spacing(
+        self, ants_mod, binary_cube: np.ndarray
+    ) -> None:
+        from niiflow.preproc.functional.array.masks import (
+            smooth_mask as array_smooth_mask,
+        )
+        from niiflow.preproc.functional.image.masks import (
+            smooth_mask as image_smooth_mask,
+        )
+
+        image = ants_mod.from_numpy(binary_cube, spacing=(2.0, 1.0, 0.5))
+        out = image_smooth_mask(image, sigma=2.0, use_mm=True)
+        expected = array_smooth_mask(binary_cube, sigma=(1.0, 2.0, 4.0))
+        np.testing.assert_allclose(out.numpy(), expected)
+
+    def test_smooth_mask_use_mm_rescales_sigma_tuple(
+        self, ants_mod, binary_cube: np.ndarray
+    ) -> None:
+        from niiflow.preproc.functional.array.masks import (
+            smooth_mask as array_smooth_mask,
+        )
+        from niiflow.preproc.functional.image.masks import (
+            smooth_mask as image_smooth_mask,
+        )
+
+        image = ants_mod.from_numpy(binary_cube, spacing=(2.0, 1.0, 0.5))
+        out = image_smooth_mask(image, sigma=(2.0, 1.0, 1.0), use_mm=True)
+        expected = array_smooth_mask(binary_cube, sigma=(1.0, 1.0, 2.0))
+        np.testing.assert_allclose(out.numpy(), expected)
+
+    def test_smooth_mask_rejects_non_bool_use_mm(
+        self, ants_mod, binary_cube: np.ndarray
+    ) -> None:
+        from niiflow.preproc.functional.image.masks import (
+            smooth_mask as image_smooth_mask,
+        )
+
+        image = ants_mod.from_numpy(binary_cube)
+        with pytest.raises(TypeError, match="use_mm"):
+            image_smooth_mask(image, sigma=1.0, use_mm=1)  # type: ignore[arg-type]
 
     def test_relabel_mask_preserves_geometry(self, ants_mod) -> None:
         from niiflow.preproc.functional.image.masks import (

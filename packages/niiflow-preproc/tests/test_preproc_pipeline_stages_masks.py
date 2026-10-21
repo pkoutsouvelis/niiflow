@@ -8,7 +8,9 @@ import numpy as np
 import pytest
 
 from niiflow.preproc.pipelines.pipeline_stages import (
+    ANTsThreshold,
     ApplyMask,
+    ComposeMasks,
     RelabelMask,
     RuntimeContext,
     SmoothMask,
@@ -55,6 +57,60 @@ class TestApplyMask:
         assert out_path.is_file()
 
 
+class TestANTsThreshold:
+    def test_thresholds_non_zero_values_and_saves(
+        self, tmp_path: Path, ants_mod
+    ) -> None:
+        image_path = _write_nifti(
+            ants_mod,
+            tmp_path / "image.nii.gz",
+            np.array([[[0.0, 0.5], [2.0, 0.0]]]),
+        )
+        out_path = tmp_path / "binary.nii.gz"
+        stage = ANTsThreshold(
+            params={
+                "image": str(image_path),
+                "low_thresh": 0.0,
+                "inclusive": True,
+            },
+            save_outputs={"out_mask": str(out_path)},
+        )
+        out = stage.run(step_ctx("threshold")).outputs["threshold"]["out_mask"]
+        assert sorted(np.unique(out.numpy()).tolist()) == [0.0, 1.0]
+        assert int(np.sum(out.numpy())) == 2
+        assert out_path.is_file()
+
+
+class TestComposeMasks:
+    def test_composes_paths_and_saves(self, tmp_path: Path, ants_mod) -> None:
+        first_path = _write_nifti(
+            ants_mod,
+            tmp_path / "first.nii.gz",
+            np.array([[[0, 2], [0, 3]]]),
+        )
+        second_path = _write_nifti(
+            ants_mod,
+            tmp_path / "second.nii.gz",
+            np.array([[[1, 0], [0, 3]]]),
+        )
+        out_path = tmp_path / "composed.nii.gz"
+        stage = ComposeMasks(
+            params={
+                "masks": [str(first_path), str(second_path)],
+                "operator": "OR",
+            },
+            save_outputs={"out_mask": str(out_path)},
+        )
+        out = stage.run(step_ctx("compose_masks")).outputs["compose_masks"]["out_mask"]
+        assert sorted(np.unique(out.numpy()).tolist()) == [0.0, 1.0, 2.0, 3.0]
+        assert out_path.is_file()
+
+    def test_rejects_non_sequence_masks(self) -> None:
+        stage = ComposeMasks(params={"masks": "mask.nii.gz"})
+        with pytest.raises(TypeError, match="sequence"):
+            stage.run(step_ctx("compose_masks"))
+
+
 class TestSmoothMask:
     def test_smooths_and_saves(self, tmp_path: Path, ants_mod) -> None:
         mask = np.zeros((9, 9, 9), dtype=np.float64)
@@ -70,6 +126,27 @@ class TestSmoothMask:
         out = ctx.outputs["smooth"]["out_mask"]
         assert float(out.numpy().max()) == pytest.approx(1.0)
         assert out_path.is_file()
+
+    def test_use_mm_matches_voxel_sigma_after_spacing(
+        self, tmp_path: Path, ants_mod
+    ) -> None:
+        mask = np.zeros((9, 9, 9), dtype=np.float64)
+        mask[3:6, 3:6, 3:6] = 1.0
+        image = ants_mod.from_numpy(mask, spacing=(2.0, 2.0, 2.0))
+        mask_path = tmp_path / "mask.nii.gz"
+        ants_mod.image_write(image, str(mask_path))
+
+        mm_out = (
+            SmoothMask(params={"mask": str(mask_path), "sigma": 2.0, "use_mm": True})
+            .run(step_ctx("smooth_mm"))
+            .outputs["smooth_mm"]["out_mask"]
+        )
+        voxel_out = (
+            SmoothMask(params={"mask": str(mask_path), "sigma": 1.0, "use_mm": False})
+            .run(step_ctx("smooth_vox"))
+            .outputs["smooth_vox"]["out_mask"]
+        )
+        np.testing.assert_allclose(mm_out.numpy(), voxel_out.numpy())
 
     def test_construction_via_helpers(self, tmp_path: Path) -> None:
         stage = make_stage(SmoothMask, tmp_path)

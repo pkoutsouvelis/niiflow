@@ -53,12 +53,66 @@ def reject_reserved_kwargs(
         )
 
 
+def mm_to_voxels(
+    values: float | tuple[float, ...],
+    spacing: Sequence[float],
+) -> tuple[float, ...]:
+    """Convert millimetre distances to voxel units using `spacing`.
+
+    A scalar is broadcast across every axis. A tuple is converted per axis
+    and must match the length of `spacing`.
+
+    Args:
+        values:
+            Distance(s) in millimetres.
+        spacing:
+            Per-axis voxel size in millimetres.
+
+    Returns:
+        One voxel-unit value per axis.
+
+    Raises:
+        TypeError: If `values` is not a number or a tuple of numbers.
+        ValueError: If `spacing` is empty, non-1-D, or not strictly positive
+            and finite, or if a `values` tuple does not match `spacing`.
+    """
+    spacing_arr = np.asarray(spacing, dtype=np.float64)
+    if spacing_arr.ndim != 1 or spacing_arr.size == 0:
+        raise ValueError(
+            f"`spacing` must be a 1-D sequence of voxel sizes, got {spacing!r}"
+        )
+    if bool(np.any(~np.isfinite(spacing_arr))) or bool(np.any(spacing_arr <= 0)):
+        raise ValueError(
+            f"`spacing` must contain positive finite values, got {spacing!r}"
+        )
+
+    if isinstance(values, (int, float)) and not isinstance(values, bool):
+        return tuple(float(values) / float(size) for size in spacing_arr)
+    if isinstance(values, tuple):
+        if len(values) != spacing_arr.size:
+            raise ValueError(
+                f"`values` tuple length ({len(values)}) must match spacing "
+                f"length ({spacing_arr.size})"
+            )
+        return tuple(
+            float(value) / float(size) for value, size in zip(values, spacing_arr)
+        )
+    raise TypeError(
+        f"`values` must be a float or a tuple of floats, got {type(values).__name__}"
+    )
+
+
 def ants_to_numpy_with_metadata(image: ANTsImage) -> tuple[np.ndarray, dict[str, Any]]:
     """Convert `image` to numpy and capture enough metadata to reconstruct it."""
     ensure_ants_image(image)
     data = image.numpy()
     validate_numeric_array(data, name="image.numpy()")
-    metadata = {"reference_image": image}
+    metadata = {
+        "shape": list(image.shape),
+        "origin": [float(value) for value in image.origin],
+        "spacing": [float(value) for value in image.spacing],
+        "direction": np.asarray(image.direction, dtype=np.float64).tolist(),
+    }
     return data, metadata
 
 
@@ -71,17 +125,69 @@ def numpy_to_ants_with_metadata(
         raise ValueError(
             f"`metadata` must be a dictionary, got {type(metadata).__name__}"
         )
-    if "reference_image" not in metadata:
-        raise ValueError("`metadata` must include a `reference_image` key")
+    required = {"shape", "origin", "spacing", "direction"}
+    missing = sorted(required - metadata.keys())
+    if missing:
+        raise ValueError(f"`metadata` is missing required key(s): {missing}")
 
-    reference_image = metadata["reference_image"]
-    ensure_ants_image(reference_image, name="metadata['reference_image']")
-    if array.shape != reference_image.shape:
+    raw_shape = metadata["shape"]
+    if not isinstance(raw_shape, (list, tuple)) or not all(
+        isinstance(value, (int, np.integer)) and not isinstance(value, bool)
+        for value in raw_shape
+    ):
+        raise ValueError("`metadata['shape']` must be a sequence of integers")
+    shape = tuple(int(value) for value in raw_shape)
+    if not shape or any(value <= 0 for value in shape):
         raise ValueError(
-            "`array` must have the same shape as metadata reference image, got "
-            f"{array.shape} and {reference_image.shape}"
+            f"`metadata['shape']` must contain positive dimensions, got {shape}"
         )
-    return reference_image.new_image_like(array)
+    if array.shape != shape:
+        raise ValueError(
+            "`array` must have the shape recorded in metadata, got "
+            f"{array.shape} and {shape}"
+        )
+
+    ndim = len(shape)
+    try:
+        origin = np.asarray(metadata["origin"], dtype=np.float64)
+        spacing = np.asarray(metadata["spacing"], dtype=np.float64)
+        direction = np.asarray(metadata["direction"], dtype=np.float64)
+    except (TypeError, ValueError) as e:
+        raise ValueError(
+            "`metadata` origin, spacing, and direction must be numeric"
+        ) from e
+
+    if origin.shape != (ndim,):
+        raise ValueError(
+            f"`metadata['origin']` must have shape ({ndim},), got {origin.shape}"
+        )
+    if spacing.shape != (ndim,):
+        raise ValueError(
+            f"`metadata['spacing']` must have shape ({ndim},), got {spacing.shape}"
+        )
+    if direction.shape != (ndim, ndim):
+        raise ValueError(
+            f"`metadata['direction']` must have shape ({ndim}, {ndim}), "
+            f"got {direction.shape}"
+        )
+    if not all(
+        bool(np.all(np.isfinite(values))) for values in (origin, spacing, direction)
+    ):
+        raise ValueError(
+            "`metadata` origin, spacing, and direction must contain finite values"
+        )
+    if bool(np.any(spacing <= 0)):
+        raise ValueError(
+            f"`metadata['spacing']` must contain positive values, got "
+            f"{spacing.tolist()}"
+        )
+
+    return ants.from_numpy(
+        array,
+        origin=tuple(origin.tolist()),
+        spacing=tuple(spacing.tolist()),
+        direction=direction,
+    )
 
 
 def reconstruct_ants_image(

@@ -25,6 +25,7 @@ from niiflow.preproc.pipelines.pipeline_stages import (
     ANTsRegistration,
     ANTsResample,
     ANTsResampleToTarget,
+    ANTsThreshold,
     ApplyMask,
     CenterCrop,
     CenterPad,
@@ -32,6 +33,7 @@ from niiflow.preproc.pipelines.pipeline_stages import (
     CheckImageSimilarity,
     CheckVoxelSpacing,
     ClampIntensities,
+    ComposeMasks,
     CropToMask,
     CropToRange,
     Delete,
@@ -46,6 +48,7 @@ from niiflow.preproc.pipelines.pipeline_stages import (
     RuntimeContext,
     SmoothMask,
     SyncMetadata,
+    ToANTs,
     ToNumpy,
     ZTransformNorm,
 )
@@ -84,6 +87,8 @@ SHIPPED_STAGE_CLASSES: tuple[StageFactory, ...] = (
     CheckDimensions,
     CheckImageSimilarity,
     ApplyMask,
+    ANTsThreshold,
+    ComposeMasks,
     SmoothMask,
     RelabelMask,
     PointwiseArithmetic,
@@ -91,6 +96,7 @@ SHIPPED_STAGE_CLASSES: tuple[StageFactory, ...] = (
     GetImage,
     Rename,
     Reorient,
+    ToANTs,
     ToNumpy,
     SyncMetadata,
 )
@@ -116,6 +122,8 @@ PRIMARY_SAVE_KEY: dict[StageFactory, str] = {
     CheckDimensions: "passed",
     CheckImageSimilarity: "passed",
     ApplyMask: "out_image",
+    ANTsThreshold: "out_mask",
+    ComposeMasks: "out_mask",
     SmoothMask: "out_mask",
     RelabelMask: "out_mask",
     PointwiseArithmetic: "out_image",
@@ -123,6 +131,7 @@ PRIMARY_SAVE_KEY: dict[StageFactory, str] = {
     GetImage: "out_image",
     Rename: "out_path",
     Reorient: "out_image",
+    ToANTs: "out_image",
     ToNumpy: "array",
     SyncMetadata: "out_image",
 }
@@ -281,6 +290,27 @@ def _apply_mask_stage_config(
     return {"image": str(image), "mask": str(mask)}, {"out_image": None}
 
 
+def _ants_threshold_stage_config(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    image = touch(tmp_path / "image.nii.gz")
+    return (
+        {"image": str(image), "low_thresh": 0.0, "inclusive": True},
+        {"out_mask": None},
+    )
+
+
+def _compose_masks_stage_config(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    first = touch(tmp_path / "first.nii.gz")
+    second = touch(tmp_path / "second.nii.gz")
+    return (
+        {"masks": [str(first), str(second)], "operator": "OR"},
+        {"out_mask": None},
+    )
+
+
 def _smooth_mask_stage_config(
     tmp_path: Path,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -303,6 +333,24 @@ def _to_numpy_stage_config(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     image = touch(tmp_path / "image.nii.gz")
     return {"image": str(image), "dtype": "float32"}, {"array": None}
+
+
+def _to_ants_stage_config(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    array = touch(tmp_path / "array.npy")
+    return (
+        {
+            "array": str(array),
+            "metadata": {
+                "shape": [1],
+                "origin": [0.0],
+                "spacing": [1.0],
+                "direction": [[1.0]],
+            },
+        },
+        {"out_image": None},
+    )
 
 
 def _pointwise_arithmetic_stage_config(
@@ -380,10 +428,13 @@ STAGE_CONFIG_BUILDERS: dict[
     Rename: _rename_stage_config,
     GetImage: _get_image_stage_config,
     ApplyMask: _apply_mask_stage_config,
+    ANTsThreshold: _ants_threshold_stage_config,
+    ComposeMasks: _compose_masks_stage_config,
     SmoothMask: _smooth_mask_stage_config,
     RelabelMask: _relabel_mask_stage_config,
     PointwiseArithmetic: _pointwise_arithmetic_stage_config,
     Reorient: _reorient_stage_config,
+    ToANTs: _to_ants_stage_config,
     ToNumpy: _to_numpy_stage_config,
     SyncMetadata: _sync_metadata_stage_config,
 }
@@ -446,10 +497,13 @@ STUB_FORWARD_OUTPUTS: dict[StageFactory, dict[str, Any]] = {
     Rename: {"out_path": object()},
     GetImage: {"out_image": object()},
     ApplyMask: {"out_image": object()},
+    ANTsThreshold: {"out_mask": object()},
+    ComposeMasks: {"out_mask": object()},
     SmoothMask: {"out_mask": object()},
     RelabelMask: {"out_mask": object()},
     PointwiseArithmetic: {"out_image": object()},
     Reorient: {"out_image": object()},
+    ToANTs: {"out_image": object()},
     ToNumpy: {"array": object(), "metadata": {}},
     SyncMetadata: {"out_image": object()},
 }

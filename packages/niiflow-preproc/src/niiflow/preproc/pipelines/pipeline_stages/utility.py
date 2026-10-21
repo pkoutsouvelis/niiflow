@@ -8,6 +8,7 @@ __all__ = [
     "Rename",
     "Reorient",
     "SyncMetadata",
+    "ToANTs",
     "ToNumpy",
 ]
 
@@ -16,16 +17,21 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from ants.core import ANTsImage
 
 from niiflow.preproc.functional.image.metadata import sync_ants_metadata
 from niiflow.preproc.functional.image.reorientation import ants_reorient
-from niiflow.preproc.functional.image.utils import ants_to_numpy_with_metadata
+from niiflow.preproc.functional.image.utils import (
+    ants_to_numpy_with_metadata,
+    numpy_to_ants_with_metadata,
+)
 from niiflow.preproc.pipelines.pipeline_stages.pipeline_stage import PipelineStage
 from niiflow.preproc.utils.file import (
     ants_image_read,
     ants_image_write,
     delete_paths,
+    read_json,
     resolve_path,
     write_json,
     write_npy,
@@ -357,4 +363,67 @@ class ToNumpy(PipelineStage):
             return write_npy(value, output_path)
         if key == "metadata":
             return write_json(value, output_path)
+        raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
+
+
+class ToANTs(PipelineStage):
+    """Convert a NumPy array to an ANTs image using captured metadata.
+
+    **Parameters** (``params``):
+
+    * ``array`` — :class:`numpy.ndarray` or path to a ``.npy`` file.
+    * ``metadata`` — geometry metadata produced by :class:`ToNumpy`, or a path
+      to that metadata saved as JSON.
+    * ``dtype`` — optional dtype used to cast the array before conversion.
+
+    **Outputs** (from :meth:`forward`):
+
+    * ``out_image`` — reconstructed ANTs image.
+
+    **Persistence** (``save_outputs``):
+
+    * ``out_image`` — NIfTI path (``.nii`` or ``.nii.gz``).
+    """
+
+    REQUIRED_PARAMS = frozenset({"array", "metadata"})
+
+    def load_param(self, key: str, value: Any) -> Any:
+        if key == "array":
+            if isinstance(value, np.ndarray):
+                return value
+            resolved = resolve_path(value)
+            try:
+                array = np.load(resolved, allow_pickle=False)
+            except Exception as e:
+                raise ValueError(f"Failed to read NumPy array from {resolved}") from e
+            if not isinstance(array, np.ndarray):
+                raise ValueError(
+                    f"`array` path must contain one NumPy array, got "
+                    f"{type(array).__name__}"
+                )
+            return array
+        if key == "metadata":
+            metadata = read_json(value) if isinstance(value, (str, Path)) else value
+            if not isinstance(metadata, dict):
+                raise TypeError(
+                    f"`metadata` must be a dictionary, got "
+                    f"{type(metadata).__name__}"
+                )
+            return dict(metadata)
+        if key == "dtype" and value is not None:
+            return resolve_numpy_dtype(value)
+        return value
+
+    def forward(self, **params: Any) -> dict[str, Any]:
+        array: np.ndarray = params["array"]
+        dtype = params.get("dtype")
+        if dtype is not None:
+            array = array.astype(dtype)
+        return {
+            "out_image": numpy_to_ants_with_metadata(array, params["metadata"]),
+        }
+
+    def save_output(self, key: str, value: Any, output_path: Path) -> Path:
+        if key == "out_image":
+            return ants_image_write(value, output_path)
         raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")

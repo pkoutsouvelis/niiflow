@@ -13,6 +13,13 @@ def validate_numeric_array(array: np.ndarray, name: str = "array") -> None:
         raise ValueError(f"`{name}` must have a numeric dtype, got {array.dtype}")
 
 
+def validate_integer_values(array: np.ndarray, name: str = "array") -> None:
+    """Ensure `array` is numeric and contains only integer-valued voxels."""
+    validate_numeric_array(array, name=name)
+    if not bool(np.all(np.equal(np.mod(array, 1), 0))):
+        raise ValueError(f"`{name}` must contain only integer-valued voxels")
+
+
 def validate_binary_values(array: np.ndarray, name: str = "array") -> None:
     """Ensure a numeric array contains only the values ``0`` and/or ``1``.
 

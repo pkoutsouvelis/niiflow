@@ -9,6 +9,7 @@ __all__ = [
     "ANTsRegistration",
     "ANTsResample",
     "ANTsResampleToTarget",
+    "ANTsThreshold",
     "ApplyMask",
     "CenterCrop",
     "CenterPad",
@@ -17,6 +18,7 @@ __all__ = [
     "CheckVoxelSpacing",
     "ClampIntensities",
     "Compose",
+    "ComposeMasks",
     "CropToMask",
     "CropToRange",
     "Delete",
@@ -31,6 +33,7 @@ __all__ = [
     "Reorient",
     "SmoothMask",
     "SyncMetadata",
+    "ToANTs",
     "ToNumpy",
     "ZTransformNorm",
     "create_pipeline_stage",
@@ -49,7 +52,7 @@ from .croppad import (
 )
 from .denoising import ANTsDenoise
 from .intensity_normalization import ClampIntensities, MinmaxNorm, ZTransformNorm
-from .masks import ApplyMask, RelabelMask, SmoothMask
+from .masks import ANTsThreshold, ApplyMask, ComposeMasks, RelabelMask, SmoothMask
 from .pipelines import ANTsPreprocessBrainImage
 from .qc import CheckDimensions, CheckImageSimilarity, CheckVoxelSpacing
 from .registration import ANTsApplyTransforms, ANTsRegistration
@@ -60,4 +63,4 @@ from .pipeline_stage_factory import (
     create_pipeline_stage,
     discover_pipeline_stage_classes,
 )
-from .utility import Delete, GetImage, Rename, Reorient, SyncMetadata, ToNumpy
+from .utility import Delete, GetImage, Rename, Reorient, SyncMetadata, ToANTs, ToNumpy

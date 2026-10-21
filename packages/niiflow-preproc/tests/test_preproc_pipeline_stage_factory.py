@@ -46,9 +46,12 @@ class TestDiscoverPipelineStageClasses:
         registry = discover_pipeline_stage_classes()
         assert registry["CheckVoxelSpacing"] is CheckVoxelSpacing
         assert "ApplyMask" in registry
+        assert "ANTsThreshold" in registry
+        assert "ComposeMasks" in registry
         assert "SmoothMask" in registry
         assert "RelabelMask" in registry
         assert "PointwiseArithmetic" in registry
+        assert "ToANTs" in registry
         assert all(issubclass(cls, PipelineStage) for cls in registry.values())
 
     def test_registry_is_a_fresh_mapping_per_call(self) -> None:

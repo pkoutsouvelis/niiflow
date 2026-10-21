@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 __all__ = [
+    "compose_masks",
     "relabel_mask",
     "smooth_mask",
 ]
 
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 import numpy as np
@@ -16,9 +17,93 @@ from scipy.ndimage import gaussian_filter
 
 from niiflow.preproc.functional.array.utils import (
     validate_binary_values,
+    validate_integer_values,
     validate_numeric_array,
 )
 from niiflow.preproc.utils.misc import resolve_numpy_dtype
+
+
+def compose_masks(
+    masks: Sequence[np.ndarray],
+    operator: Literal["OR", "AND", "or", "and"] = "OR",
+) -> np.ndarray:
+    """Compose integer-valued masks using logical OR or AND.
+
+    Non-zero values are treated as labels rather than being collapsed to one.
+    Consequently, whenever multiple masks are non-zero at the same index they
+    must contain the same value; conflicting labels raise an error.
+
+    Args:
+        masks:
+            Two or more same-shaped, integer-valued masks.
+        operator:
+            ``"OR"`` keeps indices present in any mask. ``"AND"`` keeps only
+            indices present in every mask. Matching non-zero labels are
+            preserved. Operator names are case-insensitive.
+
+    Returns:
+        The composed mask, with a dtype determined from all input masks.
+
+    Raises:
+        TypeError: If `masks` is not a sequence or `operator` is not a string.
+        ValueError: If fewer than two masks are supplied, a mask is invalid,
+            shapes differ, the operator is unsupported, or non-zero labels
+            conflict.
+    """
+    if not isinstance(masks, Sequence) or isinstance(masks, (str, bytes)):
+        raise TypeError(
+            f"`masks` must be a sequence of numpy arrays, got {type(masks).__name__}"
+        )
+    if len(masks) < 2:
+        raise ValueError("`masks` must contain at least two masks")
+    if not isinstance(operator, str):
+        raise TypeError(f"`operator` must be a string, got {type(operator).__name__}")
+
+    normalized_operator = operator.upper()
+    if normalized_operator not in {"OR", "AND"}:
+        raise ValueError(f"`operator` must be one of 'OR' or 'AND', got {operator!r}")
+
+    first_mask = masks[0]
+    validate_integer_values(first_mask, name="masks[0]")
+    shape = first_mask.shape
+    for index, mask in enumerate(masks[1:], start=1):
+        validate_integer_values(mask, name=f"masks[{index}]")
+        if mask.shape != shape:
+            raise ValueError(
+                f"all masks must have the same shape; masks[0] has shape "
+                f"{shape} and masks[{index}] has shape {mask.shape}"
+            )
+
+    out_dtype = np.result_type(*(mask.dtype for mask in masks))
+    labels = np.zeros(shape, dtype=out_dtype)
+    seen_nonzero = np.zeros(shape, dtype=bool)
+    active = (
+        np.zeros(shape, dtype=bool)
+        if normalized_operator == "OR"
+        else np.ones(shape, dtype=bool)
+    )
+
+    for index, mask in enumerate(masks):
+        mask_values = mask.astype(out_dtype, copy=False)
+        mask_active = mask_values != 0
+        conflicts = seen_nonzero & mask_active & (labels != mask_values)
+        if bool(np.any(conflicts)):
+            conflict_index = tuple(int(i) for i in np.argwhere(conflicts)[0])
+            raise ValueError(
+                "masks contain conflicting non-zero values at index "
+                f"{conflict_index}: {labels[conflict_index]!r} and "
+                f"{mask_values[conflict_index]!r} (masks[{index}])"
+            )
+        newly_nonzero = mask_active & ~seen_nonzero
+        labels[newly_nonzero] = mask_values[newly_nonzero]
+        seen_nonzero |= mask_active
+        if normalized_operator == "OR":
+            active |= mask_active
+        else:
+            active &= mask_active
+
+    labels[~active] = 0
+    return labels
 
 
 def smooth_mask(
@@ -131,12 +216,7 @@ def relabel_mask(
         TypeError: If `mapping` is not a mapping or `allow_collisions` is not
             a bool.
     """
-    validate_numeric_array(mask, name="mask")
-    if not bool(np.all(np.equal(np.mod(mask, 1), 0))):
-        raise ValueError(
-            "`mask` must be a label mask with integer-valued voxels; got "
-            "non-integral values."
-        )
+    validate_integer_values(mask, name="mask")
 
     if not isinstance(mapping, Mapping):
         raise TypeError(
