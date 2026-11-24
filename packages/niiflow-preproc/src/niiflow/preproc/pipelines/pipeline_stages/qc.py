@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 __all__ = [
+    "AggregateChecks",
     "CheckDimensions",
-    "CheckImageSimilarity",
+    "CheckMetric",
     "CheckVoxelSpacing",
 ]
 
@@ -15,9 +16,6 @@ from typing import Any
 
 from ants.core import ANTsImage
 
-from niiflow.preproc.functional.image.registration import (
-    ants_similarity_metrics,
-)
 from niiflow.preproc.pipelines.pipeline_stages.pipeline_stage import PipelineStage
 from niiflow.preproc.utils.file import ants_image_read, write_json, write_txt
 
@@ -35,13 +33,8 @@ _COMPARE_OPS = {
     "<=": operator.le,
     "less_equal": operator.le,
 }
-
-_SIMILARITY_CUTOFF_KEYS = (
-    "correlation",
-    "mattes_mutual_information",
-    "neighborhood_correlation",
-)
-_SIMILARITY_COMBINE_MODES = frozenset({"all", "any"})
+_SHARED_QC_PARAMS = frozenset({"op", "log", "raise_on_fail", "id"})
+_AGGREGATE_RULES = frozenset({"AND", "OR"})
 
 
 def _resolve_op(value: Any) -> str:
@@ -54,6 +47,85 @@ def _resolve_op(value: Any) -> str:
             f"{sorted(_COMPARE_OPS)}"
         )
     return op
+
+
+def _load_image(value: Any) -> ANTsImage:
+    """Load ``value`` as an ANTs image when it is not one already."""
+    if isinstance(value, ANTsImage):
+        return value
+    try:
+        return ants_image_read(value, reorient=True)
+    except Exception as e:
+        raise ValueError(f"Failed to read image from {value}") from e
+
+
+def _load_shared_qc_params(key: str, value: Any) -> Any:
+    """Load ``op``, ``log``, ``raise_on_fail``, and ``id``."""
+    if key == "op":
+        return _resolve_op(value)
+    if key == "log":
+        if not isinstance(value, bool):
+            raise TypeError(f"`log` must be a boolean, got {type(value).__name__}")
+        return value
+    if key == "raise_on_fail":
+        if not isinstance(value, bool):
+            raise TypeError(
+                f"`raise_on_fail` must be a boolean, got {type(value).__name__}"
+            )
+        return value
+    if key == "id":
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value:
+            raise TypeError(f"`id` must be a non-empty string or None, got {value!r}")
+        return value
+    raise KeyError(key)
+
+
+def _qc_outputs(
+    check: str,
+    passed: bool,
+    value: Any,
+    *,
+    id: str | None = None,
+    raise_on_fail: bool = False,
+) -> dict[str, Any]:
+    """Build the ``passed`` / ``value`` / ``report`` triple shared by QC stages.
+
+    ``report`` records the check label, the pass/fail flag, and the observed
+    value. ``id`` is included when set. A failing check raises when
+    ``raise_on_fail`` is true.
+    """
+    report_value = list(value) if isinstance(value, tuple) else value
+    report: dict[str, Any] = {
+        "check": check,
+        "passed": passed,
+        "value": report_value,
+    }
+    if id is not None:
+        report["id"] = id
+    if raise_on_fail and not passed:
+        raise RuntimeError(f"{check} failed QC check (passed=False) with value={value}")
+    return {"passed": passed, "value": value, "report": report}
+
+
+def _save_qc_output(stage: str, key: str, value: Any, output_path: Path) -> Path:
+    """Persist ``passed`` and ``value`` as text and ``report`` as JSON.
+
+    Sequence values are written as comma-separated text. A scalar value is
+    written as one line.
+    """
+    if key == "passed":
+        return write_txt(str(value), output_path)
+    if key == "value":
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            text = ",".join(str(item) for item in value)
+        else:
+            text = str(value)
+        return write_txt(text, output_path)
+    if key == "report":
+        return write_json(value, output_path)
+    raise KeyError(f"Unknown output key {key!r} for {stage}")
 
 
 class CheckVoxelSpacing(PipelineStage):
@@ -90,12 +162,7 @@ class CheckVoxelSpacing(PipelineStage):
 
     def load_param(self, key: str, value: Any) -> Any:
         if key == "image":
-            if isinstance(value, ANTsImage):
-                return value
-            try:
-                return ants_image_read(value, reorient=True)
-            except Exception as e:
-                raise ValueError(f"Failed to read image from {value}") from e
+            return _load_image(value)
 
         if key == "expected":
             if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
@@ -109,29 +176,8 @@ class CheckVoxelSpacing(PipelineStage):
                 f"`expected` must be a sequence of numbers, got {type(value).__name__}"
             )
 
-        if key == "op":
-            return _resolve_op(value)
-
-        if key == "log":
-            if not isinstance(value, bool):
-                raise TypeError(f"`log` must be a boolean, got {type(value).__name__}")
-            return value
-
-        if key == "raise_on_fail":
-            if not isinstance(value, bool):
-                raise TypeError(
-                    f"`raise_on_fail` must be a boolean, got {type(value).__name__}"
-                )
-            return value
-
-        if key == "id":
-            if value is None:
-                return None
-            if not isinstance(value, str) or not value:
-                raise TypeError(
-                    f"`id` must be a non-empty string or None, got {value!r}"
-                )
-            return value
+        if key in _SHARED_QC_PARAMS:
+            return _load_shared_qc_params(key, value)
 
         return value
 
@@ -158,28 +204,16 @@ class CheckVoxelSpacing(PipelineStage):
                 f"passed={passed}"
             )
 
-        report: dict[str, Any] = {
-            "check": type(self).__name__,
-            "passed": passed,
-            "value": list(value),
-        }
-        if id is not None:
-            report["id"] = id
-        if params.get("raise_on_fail", False) and not passed:
-            raise RuntimeError(
-                f"{type(self).__name__} failed QC check (passed=False) "
-                f"with value={value}"
-            )
-        return {"passed": passed, "value": value, "report": report}
+        return _qc_outputs(
+            type(self).__name__,
+            passed,
+            value,
+            id=id,
+            raise_on_fail=params.get("raise_on_fail", False),
+        )
 
     def save_output(self, key: str, value: Any, output_path: Path) -> Path:
-        if key == "passed":
-            return write_txt(str(value), output_path)
-        if key == "value":
-            return write_txt(",".join(str(item) for item in value), output_path)
-        if key == "report":
-            return write_json(value, output_path)
-        raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
+        return _save_qc_output(type(self).__name__, key, value, output_path)
 
 
 class CheckDimensions(PipelineStage):
@@ -216,12 +250,7 @@ class CheckDimensions(PipelineStage):
 
     def load_param(self, key: str, value: Any) -> Any:
         if key == "image":
-            if isinstance(value, ANTsImage):
-                return value
-            try:
-                return ants_image_read(value, reorient=True)
-            except Exception as e:
-                raise ValueError(f"Failed to read image from {value}") from e
+            return _load_image(value)
 
         if key == "expected":
             if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
@@ -235,29 +264,8 @@ class CheckDimensions(PipelineStage):
                 f"`expected` must be a sequence of integers, got {type(value).__name__}"
             )
 
-        if key == "op":
-            return _resolve_op(value)
-
-        if key == "log":
-            if not isinstance(value, bool):
-                raise TypeError(f"`log` must be a boolean, got {type(value).__name__}")
-            return value
-
-        if key == "raise_on_fail":
-            if not isinstance(value, bool):
-                raise TypeError(
-                    f"`raise_on_fail` must be a boolean, got {type(value).__name__}"
-                )
-            return value
-
-        if key == "id":
-            if value is None:
-                return None
-            if not isinstance(value, str) or not value:
-                raise TypeError(
-                    f"`id` must be a non-empty string or None, got {value!r}"
-                )
-            return value
+        if key in _SHARED_QC_PARAMS:
+            return _load_shared_qc_params(key, value)
 
         return value
 
@@ -284,54 +292,32 @@ class CheckDimensions(PipelineStage):
                 f"passed={passed}"
             )
 
-        report: dict[str, Any] = {
-            "check": type(self).__name__,
-            "passed": passed,
-            "value": list(value),
-        }
-        if id is not None:
-            report["id"] = id
-        if params.get("raise_on_fail", False) and not passed:
-            raise RuntimeError(
-                f"{type(self).__name__} failed QC check (passed=False) "
-                f"with value={value}"
-            )
-        return {"passed": passed, "value": value, "report": report}
+        return _qc_outputs(
+            type(self).__name__,
+            passed,
+            value,
+            id=id,
+            raise_on_fail=params.get("raise_on_fail", False),
+        )
 
     def save_output(self, key: str, value: Any, output_path: Path) -> Path:
-        if key == "passed":
-            return write_txt(str(value), output_path)
-        if key == "value":
-            return write_txt(",".join(str(item) for item in value), output_path)
-        if key == "report":
-            return write_json(value, output_path)
-        raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
+        return _save_qc_output(type(self).__name__, key, value, output_path)
 
 
-class CheckImageSimilarity(PipelineStage):
-    """Gate image similarity with metric cutoffs.
-
-    Typical use case is registration QC: compare a warped moving image against
-    its fixed target, optionally inside a shared mask. Wraps
-    :func:`~niiflow.preproc.functional.image.registration.ants_similarity_metrics`.
-    Only metrics with a non-``None`` cutoff are computed and evaluated.
-    Scores use higher-is-better semantics; a metric passes when
-    ``score >= cutoff``.
+class CheckMetric(PipelineStage):
+    """Compare one scalar metric against an expected threshold.
 
     **Parameters** (``params``):
 
-    * ``image`` — moving :class:`ants.core.ANTsImage` or path (already in
-      ``target`` space).
-    * ``target`` — fixed/target :class:`ants.core.ANTsImage` or path.
-    * ``mask`` — optional mask :class:`ants.core.ANTsImage` or path in the same
-      space; ``None`` / omitted evaluates over the full image.
-    * ``correlation`` / ``mattes_mutual_information`` /
-      ``neighborhood_correlation`` — optional float cutoffs. ``None`` (or
-      omitted) skips that metric. At least one cutoff is required.
-    * ``combine`` — ``"all"`` (default) requires every enabled metric to pass;
-      ``"any"`` requires at least one enabled metric to pass.
-    * ``log`` — when ``True``, log scores and pass/fail (requires
-      ``verbose=True``).
+    * ``metric`` — observed scalar score.
+    * ``expected`` — scalar threshold. A sequence is not accepted.
+    * ``op`` — comparison operator (default ``">="``). Symbolic (``">="``) or
+      readable (``"greater_equal"``) forms are accepted.
+    * ``name`` — optional label appended to the check name in logs, the
+      failure message, and ``report["check"]``. ``"DSC"`` yields
+      ``CheckMetric-DSC``. Omitted or ``None`` leaves the class name.
+    * ``log`` — when ``True``, log the observed value and pass/fail result
+      (requires stage ``verbose=True``).
     * ``id`` — optional string included in ``report`` when set; omitted when
       ``None``.
     * ``raise_on_fail`` — when ``True``, raise from :meth:`forward` if
@@ -339,146 +325,172 @@ class CheckImageSimilarity(PipelineStage):
 
     **Outputs** (from :meth:`forward`):
 
-    * ``passed`` — overall gate result under ``combine``.
-    * ``value`` — mapping of enabled metric name -> score.
+    * ``passed`` — whether ``op(metric, expected)`` holds.
+    * ``value`` — the observed metric as a float.
     * ``report`` — JSON-serialisable summary (``check``, ``passed``, ``value``,
-      ``cutoffs``, ``combine``, ``metric_passed``, and ``id`` when provided).
+      and ``id`` when provided).
 
     **Persistence** (``save_outputs``):
 
     * ``passed`` — ``.txt`` path; one line ``True`` or ``False``.
-    * ``value`` — ``.json`` path; metric name -> score mapping.
+    * ``value`` — ``.txt`` path; one line with the score.
     * ``report`` — ``.json`` path.
     """
 
-    REQUIRED_PARAMS = frozenset({"image", "target"})
-
-    def check_params(self, params: dict[str, Any]) -> None:
-        enabled = [
-            key for key in _SIMILARITY_CUTOFF_KEYS if params.get(key) is not None
-        ]
-        if not enabled:
-            names = ", ".join(_SIMILARITY_CUTOFF_KEYS)
-            raise ValueError(
-                "at least one similarity cutoff must be set (non-None); "
-                f"expected one of {{{names}}}"
-            )
-        combine = params.get("combine", "all")
-        if not isinstance(combine, str) or combine not in _SIMILARITY_COMBINE_MODES:
-            raise ValueError(
-                f"`combine` must be one of {sorted(_SIMILARITY_COMBINE_MODES)}, "
-                f"got {combine!r}"
-            )
-
-    def _load_image(self, value: Any, *, label: str) -> ANTsImage:
-        if isinstance(value, ANTsImage):
-            return value
-        try:
-            return ants_image_read(value, reorient=True)
-        except Exception as e:
-            raise ValueError(f"Failed to read {label} from {value}") from e
+    REQUIRED_PARAMS = frozenset({"metric", "expected"})
 
     def load_param(self, key: str, value: Any) -> Any:
-        if key in {"image", "target"}:
-            return self._load_image(value, label=key)
+        if key in {"metric", "expected"}:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"`{key}` must be a number, got {type(value).__name__}")
+            number = float(value)
+            if number != number or number in {float("inf"), float("-inf")}:
+                raise ValueError(f"`{key}` must be finite, got {value!r}")
+            return number
 
-        if key == "mask":
+        if key == "name":
             if value is None:
                 return None
-            return self._load_image(value, label=key)
-
-        if key in _SIMILARITY_CUTOFF_KEYS:
-            if value is None:
-                return None
-            try:
-                return float(value)
-            except (TypeError, ValueError) as e:
+            if not isinstance(value, str) or not value.strip():
                 raise TypeError(
-                    f"`{key}` must be a float or None, got {value!r}"
-                ) from e
-
-        if key == "combine":
-            if not isinstance(value, str) or value not in _SIMILARITY_COMBINE_MODES:
-                raise ValueError(
-                    f"`combine` must be one of "
-                    f"{sorted(_SIMILARITY_COMBINE_MODES)}, got {value!r}"
+                    f"`name` must be a non-empty string or None, got {value!r}"
                 )
-            return value
+            return value.strip()
 
-        if key == "log":
-            if not isinstance(value, bool):
-                raise TypeError(f"`log` must be a boolean, got {type(value).__name__}")
-            return value
-
-        if key == "raise_on_fail":
-            if not isinstance(value, bool):
-                raise TypeError(
-                    f"`raise_on_fail` must be a boolean, got {type(value).__name__}"
-                )
-            return value
-
-        if key == "id":
-            if value is None:
-                return None
-            if not isinstance(value, str) or not value:
-                raise TypeError(
-                    f"`id` must be a non-empty string or None, got {value!r}"
-                )
-            return value
+        if key in _SHARED_QC_PARAMS:
+            return _load_shared_qc_params(key, value)
 
         return value
 
     def forward(self, **params: Any) -> dict[str, Any]:
-        cutoffs = {
-            key: params[key]
-            for key in _SIMILARITY_CUTOFF_KEYS
-            if params.get(key) is not None
-        }
-        combine = params.get("combine", "all")
+        value = params["metric"]
+        expected = params["expected"]
+        op = params.get("op", ">=")
         log = params.get("log", False)
         id = params.get("id")
-
-        scores = ants_similarity_metrics(
-            params["image"],
-            params["target"],
-            mask=params.get("mask"),
-            metrics=tuple(cutoffs),
-        )
-        metric_passed = {
-            name: float(scores[name]) >= float(cutoff)
-            for name, cutoff in cutoffs.items()
-        }
-        passed_flags = tuple(metric_passed.values())
-        passed = all(passed_flags) if combine == "all" else any(passed_flags)
+        name = params.get("name")
+        label = type(self).__name__ if not name else f"{type(self).__name__}-{name}"
+        passed = bool(_COMPARE_OPS[op](value, expected))
 
         if log and self.verbose:
             self.log(
-                f"[QC similarity] scores={scores} cutoffs={cutoffs} "
-                f"combine={combine!r} passed={passed}"
+                f"[QC {label}] value={value} expected={expected} op={op!r} "
+                f"passed={passed}"
             )
 
-        report: dict[str, Any] = {
-            "check": type(self).__name__,
-            "passed": passed,
-            "value": {name: float(score) for name, score in scores.items()},
-            "cutoffs": {name: float(cutoff) for name, cutoff in cutoffs.items()},
-            "combine": combine,
-            "metric_passed": metric_passed,
-        }
-        if id is not None:
-            report["id"] = id
-        if params.get("raise_on_fail", False) and not passed:
-            raise RuntimeError(
-                f"{type(self).__name__} failed QC check (passed=False) "
-                f"with value={scores}"
-            )
-        return {"passed": passed, "value": scores, "report": report}
+        return _qc_outputs(
+            label,
+            passed,
+            value,
+            id=id,
+            raise_on_fail=params.get("raise_on_fail", False),
+        )
 
     def save_output(self, key: str, value: Any, output_path: Path) -> Path:
-        if key == "passed":
-            return write_txt(str(value), output_path)
-        if key == "value":
-            return write_json(value, output_path)
-        if key == "report":
-            return write_json(value, output_path)
-        raise KeyError(f"Unknown output key {key!r} for {type(self).__name__}")
+        return _save_qc_output(type(self).__name__, key, value, output_path)
+
+
+class AggregateChecks(PipelineStage):
+    """Combine QC pass flags with AND or OR.
+
+    **Parameters** (``params``):
+
+    * ``flags`` — non-empty sequence of boolean ``passed`` values from earlier
+      QC stages.
+    * ``rule`` — ``"AND"`` requires every flag to pass; ``"OR"`` requires at
+      least one. Matching is case-insensitive.
+    * ``log`` — when ``True``, log the flags and pass/fail result (requires
+      stage ``verbose=True``).
+    * ``id`` — optional string included in ``report`` when set; omitted when
+      ``None``.
+    * ``raise_on_fail`` — when ``True``, raise from :meth:`forward` if
+      ``passed`` is ``False`` (default ``False``).
+
+    **Outputs** (from :meth:`forward`):
+
+    * ``passed`` — whether the flags satisfy ``rule``.
+    * ``value`` — the flags as a tuple of booleans.
+    * ``report`` — JSON-serialisable summary (``check``, ``passed``, ``value``,
+      and ``id`` when provided).
+
+    **Persistence** (``save_outputs``):
+
+    * ``passed`` — ``.txt`` path; one line ``True`` or ``False``.
+    * ``value`` — ``.txt`` path; comma-separated flags.
+    * ``report`` — ``.json`` path.
+    """
+
+    REQUIRED_PARAMS = frozenset({"flags", "rule"})
+
+    def check_params(self, params: dict[str, Any]) -> None:
+        rule = params["rule"]
+        if not isinstance(rule, str):
+            raise TypeError(f"`rule` must be a string, got {type(rule).__name__}")
+        if rule.strip().upper() not in _AGGREGATE_RULES:
+            raise ValueError(
+                f"`rule` must be one of {sorted(_AGGREGATE_RULES)}, got {rule!r}"
+            )
+        flags = params["flags"]
+        if not isinstance(flags, Sequence) or isinstance(flags, (str, bytes)):
+            raise TypeError(
+                f"`flags` must be a sequence of booleans, got {type(flags).__name__}"
+            )
+        if len(flags) == 0:
+            raise ValueError("`flags` must be a non-empty sequence of booleans")
+
+    def load_param(self, key: str, value: Any) -> Any:
+        if key == "flags":
+            if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+                raise TypeError(
+                    f"`flags` must be a sequence of booleans, "
+                    f"got {type(value).__name__}"
+                )
+            flags = tuple(value)
+            if not flags:
+                raise ValueError("`flags` must be a non-empty sequence of booleans")
+            for index, flag in enumerate(flags):
+                if not isinstance(flag, bool):
+                    raise TypeError(
+                        f"`flags[{index}]` must be a boolean, "
+                        f"got {type(flag).__name__}"
+                    )
+            return flags
+
+        if key == "rule":
+            if not isinstance(value, str):
+                raise TypeError(f"`rule` must be a string, got {type(value).__name__}")
+            rule = value.strip().upper()
+            if rule not in _AGGREGATE_RULES:
+                raise ValueError(
+                    f"`rule` must be one of {sorted(_AGGREGATE_RULES)}, got {value!r}"
+                )
+            return rule
+
+        if key in _SHARED_QC_PARAMS:
+            return _load_shared_qc_params(key, value)
+
+        return value
+
+    def forward(self, **params: Any) -> dict[str, Any]:
+        value = tuple(params["flags"])
+        rule = params["rule"]
+        log = params.get("log", False)
+        id = params.get("id")
+        passed = all(value) if rule == "AND" else any(value)
+
+        if log and self.verbose:
+            self.log(
+                f"[QC {type(self).__name__}] flags={value} "
+                f"rule={rule!r} passed={passed}"
+            )
+
+        return _qc_outputs(
+            type(self).__name__,
+            passed,
+            value,
+            id=id,
+            raise_on_fail=params.get("raise_on_fail", False),
+        )
+
+    def save_output(self, key: str, value: Any, output_path: Path) -> Path:
+        return _save_qc_output(type(self).__name__, key, value, output_path)

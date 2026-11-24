@@ -5,14 +5,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from niiflow.preproc.pipelines.pipeline_stages import (
+    AggregateChecks,
     CheckDimensions,
-    CheckImageSimilarity,
+    CheckMetric,
     CheckVoxelSpacing,
 )
 from test_preproc_pipeline_stages_shipped_shared import StageFactory, make_stage
@@ -21,7 +23,7 @@ from test_preproc_pipeline_stages_shipped_shared import StageFactory, make_stage
 class TestQCStagePersistence:
     @pytest.mark.parametrize(
         "stage_cls",
-        [CheckVoxelSpacing, CheckDimensions, CheckImageSimilarity],
+        [CheckVoxelSpacing, CheckDimensions, CheckMetric, AggregateChecks],
         ids=lambda cls: cls.__name__,
     )
     def test_save_output_writes_passed_txt(
@@ -38,13 +40,20 @@ class TestQCStagePersistence:
         [
             (CheckVoxelSpacing, (1.0, 2.0, 3.0), "1.0,2.0,3.0\n"),
             (CheckDimensions, (64, 128, 256), "64,128,256\n"),
+            (CheckMetric, 0.8, "0.8\n"),
+            (AggregateChecks, (True, False), "True,False\n"),
         ],
-        ids=["CheckVoxelSpacing", "CheckDimensions"],
+        ids=[
+            "CheckVoxelSpacing",
+            "CheckDimensions",
+            "CheckMetric",
+            "AggregateChecks",
+        ],
     )
     def test_save_output_writes_value_txt(
         self,
         stage_cls: StageFactory,
-        value: tuple[float, ...] | tuple[int, ...],
+        value: tuple[float, ...] | tuple[int, ...] | tuple[bool, ...] | float,
         expected_line: str,
         tmp_path: Path,
     ) -> None:
@@ -54,17 +63,9 @@ class TestQCStagePersistence:
         assert record == value_path.resolve()
         assert value_path.read_text(encoding="utf-8") == expected_line
 
-    def test_save_output_writes_registration_value_json(self, tmp_path: Path) -> None:
-        value_path = tmp_path / "value.json"
-        stage = make_stage(CheckImageSimilarity, tmp_path)
-        value = {"correlation": 0.9, "mattes_mutual_information": 1.2}
-        record = stage.save_output("value", value, value_path)
-        assert record == value_path.resolve()
-        assert json.loads(value_path.read_text(encoding="utf-8")) == value
-
     @pytest.mark.parametrize(
         "stage_cls",
-        [CheckVoxelSpacing, CheckDimensions],
+        [CheckVoxelSpacing, CheckDimensions, CheckMetric, AggregateChecks],
         ids=lambda cls: cls.__name__,
     )
     def test_save_output_rejects_non_txt_extension(
@@ -76,7 +77,7 @@ class TestQCStagePersistence:
 
     @pytest.mark.parametrize(
         "stage_cls",
-        [CheckVoxelSpacing, CheckDimensions, CheckImageSimilarity],
+        [CheckVoxelSpacing, CheckDimensions, CheckMetric, AggregateChecks],
         ids=lambda cls: cls.__name__,
     )
     def test_save_output_writes_report_json(
@@ -96,7 +97,7 @@ class TestQCStagePersistence:
 
     @pytest.mark.parametrize(
         "stage_cls",
-        [CheckVoxelSpacing, CheckDimensions, CheckImageSimilarity],
+        [CheckVoxelSpacing, CheckDimensions, CheckMetric, AggregateChecks],
         ids=lambda cls: cls.__name__,
     )
     def test_save_output_rejects_non_json_report_extension(
@@ -134,25 +135,6 @@ class TestRaiseOnFail:
             stage.forward(
                 image=image,
                 expected=(64, 64, 64),
-                raise_on_fail=True,
-            )
-
-    def test_similarity_raises_on_fail(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            "niiflow.preproc.pipelines.pipeline_stages.qc.ants_similarity_metrics",
-            lambda *a, **k: {"correlation": 0.1},
-        )
-        stage = make_stage(CheckImageSimilarity, tmp_path)
-        with pytest.raises(
-            RuntimeError,
-            match=r"CheckImageSimilarity failed QC.*value=\{'correlation': 0\.1\}",
-        ):
-            stage.forward(
-                image=object(),
-                target=object(),
-                correlation=0.5,
                 raise_on_fail=True,
             )
 
@@ -197,170 +179,141 @@ class TestQCStageReport:
         }
 
 
-class TestCheckImageSimilarity:
-    def _stage(self, tmp_path: Path, **params: object) -> CheckImageSimilarity:
-        base = {
-            "image": "image.nii.gz",
-            "target": "target.nii.gz",
-            "correlation": 0.5,
+class TestCheckMetric:
+    def test_compares_scalar_with_op(self, tmp_path: Path) -> None:
+        stage = make_stage(CheckMetric, tmp_path)
+        outputs = stage.forward(metric=0.8, expected=0.7, op=">=")
+        assert outputs["passed"] is True
+        assert outputs["value"] == 0.8
+        assert outputs["report"] == {
+            "check": "CheckMetric",
+            "passed": True,
+            "value": 0.8,
         }
-        base.update(params)
-        return make_stage(CheckImageSimilarity, tmp_path, params=base)  # type: ignore[return-value]
 
-    def test_construction_rejects_all_none_cutoffs(self, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match="at least one similarity cutoff"):
-            make_stage(
-                CheckImageSimilarity,
-                tmp_path,
-                params={
-                    "image": "m.nii.gz",
-                    "target": "t.nii.gz",
-                    "correlation": None,
-                    "mattes_mutual_information": None,
-                    "neighborhood_correlation": None,
-                },
+    def test_name_narrows_report_and_failure(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        stage = make_stage(CheckMetric, tmp_path, params={"name": "DSC"})
+        with caplog.at_level(logging.INFO):
+            outputs = stage.forward(
+                metric=0.4,
+                expected=0.7,
+                op=">=",
+                name="DSC",
+                log=True,
             )
-
-    def test_construction_rejects_missing_cutoffs(self, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match="at least one similarity cutoff"):
-            CheckImageSimilarity(
-                params={
-                    "image": str(tmp_path / "m.nii.gz"),
-                    "target": str(tmp_path / "t.nii.gz"),
-                }
-            )
-
-    def test_mask_optional(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        stage = self._stage(tmp_path)
-        captured: dict[str, object] = {}
-
-        def fake_metrics(image, target, mask=None, metrics=None):
-            captured["mask"] = mask
-            captured["metrics"] = metrics
-            return {"correlation": 1.0}
-
-        monkeypatch.setattr(
-            "niiflow.preproc.pipelines.pipeline_stages.qc.ants_similarity_metrics",
-            fake_metrics,
-        )
-        out = stage.forward(image=object(), target=object(), correlation=0.5)
-        assert captured["mask"] is None
-        assert out["passed"] is True
-
-    def test_construction_rejects_invalid_combine(self, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match="combine"):
-            self._stage(tmp_path, combine="majority")
-
-    def test_none_cutoff_skips_metric(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        stage = self._stage(
-            tmp_path,
-            correlation=0.5,
-            mattes_mutual_information=None,
-            neighborhood_correlation=0.1,
-        )
-        calls: list[tuple[str, ...]] = []
-
-        def fake_metrics(image, target, mask=None, metrics=None):
-            calls.append(tuple(metrics) if metrics is not None else ())
-            return {name: 1.0 for name in metrics or ()}
-
-        monkeypatch.setattr(
-            "niiflow.preproc.pipelines.pipeline_stages.qc.ants_similarity_metrics",
-            fake_metrics,
-        )
-        out = stage.forward(
-            image=object(),
-            target=object(),
-            correlation=0.5,
-            mattes_mutual_information=None,
-            neighborhood_correlation=0.1,
-        )
-        assert calls == [("correlation", "neighborhood_correlation")]
-        assert set(out["value"]) == {"correlation", "neighborhood_correlation"}
-        assert "mattes_mutual_information" not in out["report"]["cutoffs"]
-
-    def test_combine_all_and_any(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            "niiflow.preproc.pipelines.pipeline_stages.qc.ants_similarity_metrics",
-            lambda *a, **k: {"correlation": 0.9, "neighborhood_correlation": 0.2},
-        )
-        images = {"image": object(), "target": object()}
-        all_stage = self._stage(
-            tmp_path,
-            correlation=0.5,
-            neighborhood_correlation=0.5,
-            combine="all",
-        )
-        any_stage = self._stage(
-            tmp_path,
-            correlation=0.5,
-            neighborhood_correlation=0.5,
-            combine="any",
-        )
-        all_out = all_stage.forward(
-            **images,
-            correlation=0.5,
-            neighborhood_correlation=0.5,
-            combine="all",
-        )
-        any_out = any_stage.forward(
-            **images,
-            correlation=0.5,
-            neighborhood_correlation=0.5,
-            combine="any",
-        )
-        assert all_out["passed"] is False
-        assert any_out["passed"] is True
-        assert all_out["report"]["metric_passed"] == {
-            "correlation": True,
-            "neighborhood_correlation": False,
-        }
-
-    def test_pass_fail_report(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            "niiflow.preproc.pipelines.pipeline_stages.qc.ants_similarity_metrics",
-            lambda *a, **k: {"correlation": 0.4},
-        )
-        stage = self._stage(tmp_path, correlation=0.5, id="run-1")
-        out = stage.forward(
-            image=object(),
-            target=object(),
-            correlation=0.5,
-            id="run-1",
-        )
-        assert out["passed"] is False
-        assert out["value"] == {"correlation": 0.4}
-        assert out["report"] == {
-            "check": "CheckImageSimilarity",
-            "passed": False,
-            "value": {"correlation": 0.4},
-            "cutoffs": {"correlation": 0.5},
-            "combine": "all",
-            "metric_passed": {"correlation": False},
-            "id": "run-1",
-        }
-
-    def test_forward_propagates_physical_space_mismatch(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            "niiflow.preproc.pipelines.pipeline_stages.qc.ants_similarity_metrics",
-            lambda *a, **k: (_ for _ in ()).throw(
-                ValueError("not in the same physical space")
-            ),
-        )
-        stage = self._stage(tmp_path)
-        with pytest.raises(ValueError, match="same physical space"):
+        assert outputs["passed"] is False
+        assert outputs["report"]["check"] == "CheckMetric-DSC"
+        assert "[QC CheckMetric-DSC]" in caplog.text
+        with pytest.raises(
+            RuntimeError,
+            match=r"CheckMetric-DSC failed QC.*value=0\.4",
+        ):
             stage.forward(
-                image=object(),
-                target=object(),
-                correlation=0.5,
+                metric=0.4,
+                expected=0.7,
+                op=">=",
+                name="DSC",
+                raise_on_fail=True,
             )
+
+    def test_strips_name(self, tmp_path: Path) -> None:
+        stage = make_stage(CheckMetric, tmp_path)
+        assert stage.load_param("name", "  DSC  ") == "DSC"
+        outputs = stage.forward(metric=1.0, expected=1.0, name="DSC")
+        assert outputs["report"]["check"] == "CheckMetric-DSC"
+
+    @pytest.mark.parametrize("name", ["", "   ", 1])
+    def test_rejects_blank_or_non_string_name(
+        self, tmp_path: Path, name: object
+    ) -> None:
+        stage = make_stage(CheckMetric, tmp_path)
+        with pytest.raises(TypeError, match="name"):
+            stage.load_param("name", name)
+
+    def test_rejects_bool_and_non_finite_metric(self, tmp_path: Path) -> None:
+        stage = make_stage(CheckMetric, tmp_path)
+        with pytest.raises(TypeError, match="metric"):
+            stage.load_param("metric", True)
+        with pytest.raises(ValueError, match="finite"):
+            stage.load_param("metric", float("nan"))
+        with pytest.raises(TypeError, match="expected"):
+            stage.load_param("expected", (1.0, 1.0))
+
+    def test_default_op_is_greater_equal(self, tmp_path: Path) -> None:
+        stage = make_stage(CheckMetric, tmp_path)
+        assert stage.forward(metric=1.0, expected=1.0)["passed"] is True
+        assert stage.forward(metric=1.5, expected=1.0)["passed"] is True
+        assert stage.forward(metric=0.9, expected=1.0)["passed"] is False
+
+
+class TestAggregateChecks:
+    @pytest.mark.parametrize(
+        ("flags", "rule", "passed"),
+        [
+            ([True, True], "AND", True),
+            ([True, False], "AND", False),
+            ([False, True], "or", True),
+            ([False, False], "OR", False),
+        ],
+    )
+    def test_combines_flags(
+        self,
+        tmp_path: Path,
+        flags: list[bool],
+        rule: str,
+        passed: bool,
+    ) -> None:
+        stage = make_stage(
+            AggregateChecks,
+            tmp_path,
+            params={"flags": flags, "rule": rule},
+        )
+        loaded_flags = stage.load_param("flags", flags)
+        loaded_rule = stage.load_param("rule", rule)
+        outputs = stage.forward(flags=loaded_flags, rule=loaded_rule)
+        assert outputs["passed"] is passed
+        assert outputs["value"] == tuple(flags)
+        assert outputs["report"]["check"] == "AggregateChecks"
+        assert outputs["report"]["value"] == flags
+        assert outputs["report"]["passed"] is passed
+
+    def test_unresolved_flag_refs_wait_until_load(self, tmp_path: Path) -> None:
+        stage = AggregateChecks(
+            params={
+                "flags": [
+                    "ctx.outputs.spacing.passed",
+                    "ctx.outputs.dimensions.passed",
+                ],
+                "rule": "and",
+            },
+            save_outputs={},
+        )
+        assert stage.params["rule"] == "and"
+        with pytest.raises(TypeError, match=r"flags\[0\]"):
+            stage.load_param("flags", stage.params["flags"])
+        assert stage.load_param("rule", "and") == "AND"
+
+    def test_rejects_empty_flags(self) -> None:
+        with pytest.raises(ValueError, match="non-empty"):
+            AggregateChecks(params={"flags": [], "rule": "AND"}, save_outputs={})
+
+    def test_rejects_non_sequence_flags(self) -> None:
+        with pytest.raises(TypeError, match="flags"):
+            AggregateChecks(params={"flags": True, "rule": "AND"}, save_outputs={})
+
+    def test_rejects_unknown_rule(self) -> None:
+        with pytest.raises(ValueError, match="rule"):
+            AggregateChecks(
+                params={"flags": [True], "rule": "XOR"},
+                save_outputs={},
+            )
+
+    def test_raises_on_fail(self, tmp_path: Path) -> None:
+        stage = make_stage(AggregateChecks, tmp_path)
+        with pytest.raises(
+            RuntimeError,
+            match=r"AggregateChecks failed QC.*value=\(True, False\)",
+        ):
+            stage.forward(flags=(True, False), rule="AND", raise_on_fail=True)

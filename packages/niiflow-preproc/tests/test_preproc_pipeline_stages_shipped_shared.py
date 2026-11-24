@@ -25,18 +25,21 @@ from niiflow.preproc.pipelines.pipeline_stages import (
     ANTsRegistration,
     ANTsResample,
     ANTsResampleToTarget,
+    ANTsSimilarityMetric,
     ANTsThreshold,
+    AggregateChecks,
     ApplyMask,
     CenterCrop,
     CenterPad,
     CheckDimensions,
-    CheckImageSimilarity,
+    CheckMetric,
     CheckVoxelSpacing,
     ClampIntensities,
     ComposeMasks,
     CropToMask,
     CropToRange,
     Delete,
+    DiceSimilarityCoefficient,
     GetImage,
     MinmaxNorm,
     PadToRange,
@@ -77,6 +80,7 @@ SHIPPED_STAGE_CLASSES: tuple[StageFactory, ...] = (
     ANTsRegistration,
     ANTsResample,
     ANTsResampleToTarget,
+    ANTsSimilarityMetric,
     ANTsBrainExtraction,
     ANTsApplyTransforms,
     ANTsPreprocessBrainImage,
@@ -85,7 +89,8 @@ SHIPPED_STAGE_CLASSES: tuple[StageFactory, ...] = (
     MinmaxNorm,
     CheckVoxelSpacing,
     CheckDimensions,
-    CheckImageSimilarity,
+    CheckMetric,
+    AggregateChecks,
     ApplyMask,
     ANTsThreshold,
     ComposeMasks,
@@ -93,6 +98,7 @@ SHIPPED_STAGE_CLASSES: tuple[StageFactory, ...] = (
     RelabelMask,
     PointwiseArithmetic,
     Delete,
+    DiceSimilarityCoefficient,
     GetImage,
     Rename,
     Reorient,
@@ -112,6 +118,7 @@ PRIMARY_SAVE_KEY: dict[StageFactory, str] = {
     ANTsRegistration: "fwdtransforms",
     ANTsResample: "out_image",
     ANTsResampleToTarget: "out_image",
+    ANTsSimilarityMetric: "value",
     ANTsPreprocessBrainImage: "out_image",
     ANTsBrainExtraction: "out_image",
     ANTsApplyTransforms: "out_image",
@@ -120,7 +127,8 @@ PRIMARY_SAVE_KEY: dict[StageFactory, str] = {
     MinmaxNorm: "out_image",
     CheckVoxelSpacing: "passed",
     CheckDimensions: "passed",
-    CheckImageSimilarity: "passed",
+    CheckMetric: "passed",
+    AggregateChecks: "passed",
     ApplyMask: "out_image",
     ANTsThreshold: "out_mask",
     ComposeMasks: "out_mask",
@@ -128,6 +136,7 @@ PRIMARY_SAVE_KEY: dict[StageFactory, str] = {
     RelabelMask: "out_mask",
     PointwiseArithmetic: "out_image",
     Delete: "deleted",
+    DiceSimilarityCoefficient: "value",
     GetImage: "out_image",
     Rename: "out_path",
     Reorient: "out_image",
@@ -236,19 +245,18 @@ def _check_dimensions_stage_config(
     return {"image": str(image), "expected": (64, 64, 64)}, {}
 
 
-def _check_image_similarity_stage_config(
+def _check_metric_stage_config(
     tmp_path: Path,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    image = touch(tmp_path / "image.nii.gz")
-    target = touch(tmp_path / "target.nii.gz")
-    return (
-        {
-            "image": str(image),
-            "target": str(target),
-            "correlation": 0.5,
-        },
-        {},
-    )
+    del tmp_path
+    return {"metric": 1.0, "expected": 1.0, "name": "DSC"}, {}
+
+
+def _aggregate_checks_stage_config(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    del tmp_path
+    return {"flags": [True], "rule": "AND"}, {}
 
 
 def _delete_stage_config(
@@ -395,6 +403,29 @@ def _sync_metadata_stage_config(
     )
 
 
+def _ants_similarity_metric_stage_config(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    image = touch(tmp_path / "image.nii.gz")
+    target = touch(tmp_path / "target.nii.gz")
+    return (
+        {
+            "image": str(image),
+            "target": str(target),
+            "metric": "MattesMutualInformation",
+        },
+        {},
+    )
+
+
+def _dice_similarity_coefficient_stage_config(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    image = touch(tmp_path / "image.nii.gz")
+    target = touch(tmp_path / "target.nii.gz")
+    return {"image": str(image), "target": str(target)}, {}
+
+
 def _ants_preprocess_brain_image_stage_config(
     tmp_path: Path,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -416,6 +447,7 @@ STAGE_CONFIG_BUILDERS: dict[
     ANTsRegistration: _registration_stage_config,
     ANTsResample: _ants_resample_stage_config,
     ANTsResampleToTarget: _ants_resample_to_target_stage_config,
+    ANTsSimilarityMetric: _ants_similarity_metric_stage_config,
     ANTsPreprocessBrainImage: _ants_preprocess_brain_image_stage_config,
     ANTsApplyTransforms: _apply_transforms_stage_config,
     ClampIntensities: _intensity_norm_stage_config,
@@ -423,8 +455,10 @@ STAGE_CONFIG_BUILDERS: dict[
     MinmaxNorm: _intensity_norm_stage_config,
     CheckVoxelSpacing: _check_voxel_spacing_stage_config,
     CheckDimensions: _check_dimensions_stage_config,
-    CheckImageSimilarity: _check_image_similarity_stage_config,
+    CheckMetric: _check_metric_stage_config,
+    AggregateChecks: _aggregate_checks_stage_config,
     Delete: _delete_stage_config,
+    DiceSimilarityCoefficient: _dice_similarity_coefficient_stage_config,
     Rename: _rename_stage_config,
     GetImage: _get_image_stage_config,
     ApplyMask: _apply_mask_stage_config,
@@ -454,6 +488,13 @@ STUB_FORWARD_OUTPUTS: dict[StageFactory, dict[str, Any]] = {
     },
     ANTsResample: {"out_image": object()},
     ANTsResampleToTarget: {"out_image": object()},
+    ANTsSimilarityMetric: {
+        "value": 1.0,
+        "report": {
+            "metric": "ANTsSimilarityMetric",
+            "value": 1.0,
+        },
+    },
     ANTsPreprocessBrainImage: {
         "out_image": object(),
         "brain_mask": object(),
@@ -481,19 +522,32 @@ STUB_FORWARD_OUTPUTS: dict[StageFactory, dict[str, Any]] = {
             "value": [64, 64, 64],
         },
     },
-    CheckImageSimilarity: {
+    CheckMetric: {
         "passed": True,
-        "value": {"correlation": 1.0},
+        "value": 1.0,
         "report": {
-            "check": "CheckImageSimilarity",
+            "check": "CheckMetric-DSC",
             "passed": True,
-            "value": {"correlation": 1.0},
-            "cutoffs": {"correlation": 0.5},
-            "combine": "all",
-            "metric_passed": {"correlation": True},
+            "value": 1.0,
+        },
+    },
+    AggregateChecks: {
+        "passed": True,
+        "value": (True,),
+        "report": {
+            "check": "AggregateChecks",
+            "passed": True,
+            "value": [True],
         },
     },
     Delete: {"deleted": []},
+    DiceSimilarityCoefficient: {
+        "value": 1.0,
+        "report": {
+            "metric": "DiceSimilarityCoefficient",
+            "value": 1.0,
+        },
+    },
     Rename: {"out_path": object()},
     GetImage: {"out_image": object()},
     ApplyMask: {"out_image": object()},
@@ -757,7 +811,7 @@ class TestShippedStageRun:
         elif key == "array":
             out_file = tmp_path / "saved.npy"
         elif key in {"passed", "value"}:
-            out_file = tmp_path / f"qc_{key}.txt"
+            out_file = tmp_path / f"{key}.txt"
         elif key == "report":
             out_file = tmp_path / "qc_report.json"
         else:

@@ -24,11 +24,11 @@ from .masks import (
     smooth_mask,
 )
 from .metadata import sync_ants_metadata
+from .metrics import ants_similarity_metrics, dice_similarity_coefficient
 from .pipelines import ants_preprocess_brain_image
 from .registration import (
     ants_apply_transforms,
     ants_registration,
-    ants_similarity_metrics,
 )
 from .reorientation import ants_reorient
 from .resampling import ants_resample, ants_resample_to_target
@@ -57,6 +57,7 @@ __all__ = [
     "ants_preprocess_brain_image",
     "ants_registration",
     "ants_similarity_metrics",
+    "dice_similarity_coefficient",
     "ants_reorient",
     "ants_resample",
     "ants_resample_to_target",

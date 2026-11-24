@@ -20,6 +20,7 @@ _PIPELINE_STAGE_MODULES: tuple[str, ...] = (
     "niiflow.preproc.pipelines.pipeline_stages.denoising",
     "niiflow.preproc.pipelines.pipeline_stages.intensity_normalization",
     "niiflow.preproc.pipelines.pipeline_stages.masks",
+    "niiflow.preproc.pipelines.pipeline_stages.metrics",
     "niiflow.preproc.pipelines.pipeline_stages.pipelines",
     "niiflow.preproc.pipelines.pipeline_stages.qc",
     "niiflow.preproc.pipelines.pipeline_stages.registration",

@@ -1,6 +1,7 @@
 """Pipeline stages for preprocessing pipelines."""
 
 __all__ = [
+    "AggregateChecks",
     "ANTsApplyTransforms",
     "ANTsBiasFieldCorrection",
     "ANTsBrainExtraction",
@@ -9,12 +10,13 @@ __all__ = [
     "ANTsRegistration",
     "ANTsResample",
     "ANTsResampleToTarget",
+    "ANTsSimilarityMetric",
     "ANTsThreshold",
     "ApplyMask",
     "CenterCrop",
     "CenterPad",
     "CheckDimensions",
-    "CheckImageSimilarity",
+    "CheckMetric",
     "CheckVoxelSpacing",
     "ClampIntensities",
     "Compose",
@@ -22,6 +24,7 @@ __all__ = [
     "CropToMask",
     "CropToRange",
     "Delete",
+    "DiceSimilarityCoefficient",
     "GetImage",
     "MinmaxNorm",
     "PadToRange",
@@ -53,8 +56,9 @@ from .croppad import (
 from .denoising import ANTsDenoise
 from .intensity_normalization import ClampIntensities, MinmaxNorm, ZTransformNorm
 from .masks import ANTsThreshold, ApplyMask, ComposeMasks, RelabelMask, SmoothMask
+from .metrics import ANTsSimilarityMetric, DiceSimilarityCoefficient
 from .pipelines import ANTsPreprocessBrainImage
-from .qc import CheckDimensions, CheckImageSimilarity, CheckVoxelSpacing
+from .qc import AggregateChecks, CheckDimensions, CheckMetric, CheckVoxelSpacing
 from .registration import ANTsApplyTransforms, ANTsRegistration
 from .resampling import ANTsResample, ANTsResampleToTarget
 from .pipeline_stage import PipelineStage, RuntimeContext

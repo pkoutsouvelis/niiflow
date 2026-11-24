@@ -14,6 +14,7 @@ __all__ = [
     "compose_masks",
     "smooth_mask",
     "relabel_mask",
+    "dice_similarity_coefficient",
 ]
 
 from .arithmetic import pointwise_arithmetic
@@ -27,3 +28,4 @@ from .croppad import (
 )
 from .intensity_normalization import clamp_intensities, minmax_norm, z_transform_norm
 from .masks import compose_masks, relabel_mask, smooth_mask
+from .metrics import dice_similarity_coefficient
